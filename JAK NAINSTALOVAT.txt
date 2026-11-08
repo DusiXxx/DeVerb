@@ -1,0 +1,9 @@
+DusiX DeVerb – instalace bez Terminálu
+
+1. Zavři Logic.
+2. Otevři Finder, dej Cmd+Shift+G a vlož:  ~/Library/Audio/Plug-Ins/Components
+3. Přetáhni tam "DusiX DeVerb.component" (případně nahraď starou verzi).
+   (VST3 verze patří do ~/Library/Audio/Plug-Ins/VST3 – pro Logic není potřeba.)
+4. Otevři Logic: Audio FX > Audio Units > DusiX > DusiX DeVerb.
+
+Další aktualizace už stačí potvrdit tlačítkem verze v hlavičce pluginu.

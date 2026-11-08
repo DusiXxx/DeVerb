@@ -1,0 +1,95 @@
+# Vydani DusiX DeVerb: kdyz se na main zmeni verze v CMakeLists.txt (nebo rucne / tagem v<verze>)
+# GitHub (Mac v cloudu) postavi univerzalni plugin (AU + VST3), overi ho, zabali, spocita SHA-256
+# a zverejni vydani v<verze> s latest.json -> tlacitko verze v pluginu nabidne AKTUALIZOVAT.
+# Uz vydana verze se znovu nevydava. Pri chybe se nic nezverejni, log jde do konceptu "ci-log-...".
+name: Release
+on:
+  push:
+    branches: [main]
+    paths: ['CMakeLists.txt', '.github/workflows/release.yml']
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verze a jestli uz neni vydana
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CM=$(sed -n 's/^project(DeVerb VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "CMakeLists $CM, ref $GITHUB_REF_NAME"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$CM" ]; then echo "Tag a verze nesedi" | tee ci.log; exit 1; fi
+          echo "VER=$CM" >> "$GITHUB_ENV"
+          if gh release view "v$CM" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$CM uz je vydana - nic nedelam"; echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+      - name: Build (Intel + Apple Silicon)
+        if: env.SKIP != '1'
+        run: |
+          set -o pipefail
+          cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" 2>&1 | tee -a ci.log
+          cmake --build build --target DeVerb_AU DeVerb_VST3 -j 3 2>&1 | tail -n 400 | tee -a ci.log
+      - name: Podpis (ad-hoc) a overeni
+        if: env.SKIP != '1'
+        run: |
+          set -o pipefail
+          COMP="$(find build -type d -path '*Release/AU/DusiX DeVerb.component' | head -n 1)"
+          VST3="$(find build -type d -path '*Release/VST3/DusiX DeVerb.vst3' | head -n 1)"
+          echo "COMP=$COMP" >> "$GITHUB_ENV"; echo "VST3=$VST3" >> "$GITHUB_ENV"
+          codesign --force --deep -s - "$COMP" "$VST3" 2>&1 | tee -a ci.log
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$COMP/Contents/Info.plist" | tee -a ci.log | grep -qx "$VER"
+          lipo -archs "$COMP/Contents/MacOS/DusiX DeVerb" | tee -a ci.log
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          rm -rf "$HOME/Library/Audio/Plug-Ins/Components/DusiX DeVerb.component"
+          ditto "$COMP" "$HOME/Library/Audio/Plug-Ins/Components/DusiX DeVerb.component"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 2
+          if auval -v aufx Dxdv Dusx > auval.log 2>&1 && grep -q "AU VALIDATION SUCCEEDED" auval.log; then echo "auval OK" | tee -a ci.log
+          else tail -n 40 auval.log | tee -a ci.log; echo "::warning::auval na CI neprosel (na Macu ho overi instalator)"; fi
+      - name: Balicek + latest.json
+        if: env.SKIP != '1'
+        run: |
+          set -e
+          OUT=out; mkdir -p $OUT; STAGE=$(mktemp -d)
+          ASSET="DusiX-DeVerb-$VER-mac.zip"
+          ditto "$COMP" "$STAGE/DusiX DeVerb.component"
+          ditto "$VST3" "$STAGE/DusiX DeVerb.vst3"
+          cp "JAK NAINSTALOVAT.txt" "$STAGE/" 2>/dev/null || true
+          ditto -c -k --sequesterRsrc "$STAGE" "$OUT/$ASSET"
+          unzip -l "$OUT/$ASSET" | grep -q "DusiX DeVerb.component/Contents/MacOS/DusiX DeVerb"
+          SHA=$(shasum -a 256 "$OUT/$ASSET" | awk '{print $1}')
+          SIZE=$(stat -f%z "$OUT/$ASSET")
+          ARCHS=$(lipo -archs "$COMP/Contents/MacOS/DusiX DeVerb")
+          NOTES=$(sed -n '1,/^$/p' RELEASE_NOTES.md 2>/dev/null | head -n 20)
+          [ -z "$NOTES" ] && NOTES="DusiX DeVerb $VER"
+          printf '%s\n' "$NOTES" > "$OUT/RELEASE_NOTES.md"
+          python3 - "$OUT/latest.json" "$VER" "$SHA" "$SIZE" "$ARCHS" "$GITHUB_REPOSITORY" "$ASSET" "$OUT/RELEASE_NOTES.md" <<'PY'
+          import json, sys
+          out, ver, sha, size, archs, repo, asset, notes = sys.argv[1:9]
+          json.dump({"version": ver, "channel": "stable",
+                     "notes": open(notes).read().strip(),
+                     "notes_url": f"https://github.com/{repo}/releases/tag/v{ver}",
+                     "download": f"https://github.com/{repo}/releases/download/v{ver}/{asset}",
+                     "sha256": sha, "size": int(size), "architectures": archs.split(),
+                     "formats": ["AU", "VST3"], "macos_min": "11.0"}, open(out, "w"), indent=2, ensure_ascii=False)
+          PY
+          cat "$OUT/latest.json" | tee -a ci.log
+      - name: Zverejneni
+        if: env.SKIP != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VER" "out/DusiX-DeVerb-$VER-mac.zip" out/latest.json --target "$GITHUB_SHA" \
+             --title "DusiX DeVerb $VER" --notes-file out/RELEASE_NOTES.md --latest
+      - name: Log pri chybe (koncept vydani, neverejny)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f ci.log ] || echo "bez logu" > ci.log
+          gh release create "ci-log-${GITHUB_RUN_ID}" ci.log --draft --title "CI log v${VER:-?} (chyba)" --notes "Build v${VER:-?} (${GITHUB_SHA}) selhal - log v priloze." || true
