@@ -219,7 +219,7 @@ void EffectViz::paintReverb (juce::Graphics& g, juce::Rectangle<float> a, const 
     }
     auto plot = a.withTrimmedTop (24.0f);
     gridLines (g, plot, 10, 3);
-    const float total = pre + (p.freeze ? 4000.0f : dec * 1.15f) + 40.0f;
+    const float total = pre + (p.freeze ? 4000.0f : dec * (p.reverbType == dusi::ReverbType::prism ? 1.6f : 1.15f)) + 40.0f;
     auto xOf = [&] (float ms) { return plot.getX() + plot.getWidth() * ms / total; };
     auto yOf = [&] (float db) { return plot.getY() + plot.getHeight() * juce::jlimit (0.0f, 1.0f, -db / 66.0f); };
 
@@ -263,6 +263,22 @@ void EffectViz::paintReverb (juce::Graphics& g, juce::Rectangle<float> a, const 
     edge.lineTo (p.freeze ? plot.getRight() : xOf (pre + 10.0f + dec), p.freeze ? yOf (startDb) : yOf (startDb - 60.0f));
     g.setColour (accent);
     g.strokePath (edge, juce::PathStrokeType (2.0f));
+
+    // PRISM: basy doznivaji kratce, vysky dlouho -> dve tenke cary
+    if (p.reverbType == dusi::ReverbType::prism && ! p.freeze)
+    {
+        const std::pair<float, const char*> bands[] = { { 0.5f, "basy" }, { 1.45f, "výšky" } };
+        for (auto [m, name] : bands)
+        {
+            const float end = pre + 10.0f + dec * m;
+            g.setColour ((m < 1.0f ? ui::space : ui::filter).withAlpha (0.8f));
+            g.drawLine (x0, yOf (startDb), xOf (juce::jmin (end, total)), yOf (startDb - 60.0f * juce::jmin (1.0f, (total - pre - 10.0f) / (dec * m))), 1.2f);
+            g.setFont (ui::font (10.0f, 500));
+            const float lx = xOf (juce::jmin (end, total)) - 40.0f;
+            g.drawText (U (name), juce::Rectangle<float> (lx, yOf (startDb - 60.0f * juce::jmin (1.0f, (total - pre - 10.0f) / (dec * m))) - 14.0f, 40.0f, 12.0f),
+                        juce::Justification::centredRight);
+        }
+    }
 
     // shimmer: jiskry nad ocasem
     if (p.shimmer > 0.02f)

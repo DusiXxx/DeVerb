@@ -101,7 +101,7 @@ const juce::StringArray& DusiVerbProcessor::lfoDivisionNames()
 }
 const juce::StringArray& DusiVerbProcessor::reverbTypeNames()
 {
-    static const juce::StringArray names { "Plate", "Room", "Chamber", "Hall", "Spring" };
+    static const juce::StringArray names { "Plate", "Room", "Chamber", "Hall", "Spring", "Prism" };
     return names;
 }
 const juce::StringArray& DusiVerbProcessor::eqTypeNames()
@@ -297,7 +297,7 @@ dusi::Params DusiVerbProcessor::currentParams() const
     p.delayMix  = v ("delayMix") * 0.01f;
 
     p.reverbOn   = on ("reverbOn");
-    p.reverbType = (dusi::ReverbType) juce::jlimit (0, 4, (int) v ("reverbType"));
+    p.reverbType = (dusi::ReverbType) juce::jlimit (0, 5, (int) v ("reverbType"));
     // Pre-delay v notach: napr. 1/64 pri 140 BPM = 428.6 / 16 = 26.8 ms
     p.preDelayMs = on ("preDelaySync") ? (float) (msPerBeat * beatsFor (kPreDelayBeats, v ("preDelayDiv"))) : v ("preDelay");
     p.preDelayMs = juce::jlimit (0.0f, 500.0f, p.preDelayMs);
@@ -433,6 +433,14 @@ void DusiVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         for (int i = 0; i < size1; ++i) fifoData[(size_t) (start1 + i)] = 0.5f * (l[i] + r[i]);
         for (int i = 0; i < size2; ++i) fifoData[(size_t) (start2 + i)] = 0.5f * (l[size1 + i] + r[size1 + i]);
         fifo.finishedWrite (size1 + size2);
+
+        // analyzator dozvuku: jen mokry signal reverbu
+        const float* t = engine.getTail();
+        const int tn = juce::jmin (engine.getTailCount(), tailFifo.getFreeSpace());
+        tailFifo.prepareToWrite (tn, start1, size1, start2, size2);
+        for (int i = 0; i < size1; ++i) tailData[(size_t) (start1 + i)] = t[i];
+        for (int i = 0; i < size2; ++i) tailData[(size_t) (start2 + i)] = t[size1 + i];
+        tailFifo.finishedWrite (size1 + size2);
     }
 
     uiCorrelation.store (engine.getCorrelation());
@@ -442,20 +450,22 @@ void DusiVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     uiDuckGain.store (engine.getDuckGain());
 }
 
-int DusiVerbProcessor::readAnalyzer (float* dest, int maxSamples)
+int DusiVerbProcessor::readAnalyzer (float* dest, int maxSamples, bool reverbTail)
 {
+    auto& f = reverbTail ? tailFifo : fifo;
+    auto& data = reverbTail ? tailData : fifoData;
     int start1, size1, start2, size2;
-    const int ready = fifo.getNumReady();
+    const int ready = f.getNumReady();
     // starsi data zahodit, at analyzator ukazuje "ted"
     if (ready > maxSamples)
     {
-        fifo.prepareToRead (ready - maxSamples, start1, size1, start2, size2);
-        fifo.finishedRead (size1 + size2);
+        f.prepareToRead (ready - maxSamples, start1, size1, start2, size2);
+        f.finishedRead (size1 + size2);
     }
-    fifo.prepareToRead (juce::jmin (maxSamples, fifo.getNumReady()), start1, size1, start2, size2);
-    for (int i = 0; i < size1; ++i) dest[i] = fifoData[(size_t) (start1 + i)];
-    for (int i = 0; i < size2; ++i) dest[size1 + i] = fifoData[(size_t) (start2 + i)];
-    fifo.finishedRead (size1 + size2);
+    f.prepareToRead (juce::jmin (maxSamples, f.getNumReady()), start1, size1, start2, size2);
+    for (int i = 0; i < size1; ++i) dest[i] = data[(size_t) (start1 + i)];
+    for (int i = 0; i < size2; ++i) dest[size1 + i] = data[(size_t) (start2 + i)];
+    f.finishedRead (size1 + size2);
     return size1 + size2;
 }
 
@@ -539,7 +549,7 @@ void DusiVerbProcessor::randomize()
     auto between = [&rnd] (float a, float b) { return a + (b - a) * rnd.nextFloat(); };
 
     set ("reverbOn", 1);
-    set ("reverbType", (float) rnd.nextInt (5));
+    set ("reverbType", (float) rnd.nextInt (6));
     set ("preDelaySync", 0);
     set ("decaySync", 0);
     set ("preDelay", between (0, 60));

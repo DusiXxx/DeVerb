@@ -1,7 +1,7 @@
 #include "Presets.h"
 
 // Rychly prehled hodnot vyberu:
-//  reverbType: 0 Plate, 1 Room, 2 Chamber, 3 Hall, 4 Spring
+//  reverbType: 0 Plate, 1 Room, 2 Chamber, 3 Hall, 4 Spring, 5 Prism (vlastni zvuk DeVerbu)
 //  delayDiv:   0 1/32, 1 1/16T, 2 1/16, 3 1/8T, 4 1/16., 5 1/8, 6 1/4T, 7 1/8., 8 1/4, 9 1/2T, 10 1/4., 11 1/2
 //  preDelayDiv:0 1/128, 1 1/64, 2 1/32T, 3 1/32, 4 1/16T, 5 1/16, 6 1/8T, 7 1/8
 //  decayDiv:   0 1/4, 1 1/2, 2 1/2., 3 1 takt, 4 2 takty, 5 4 takty
@@ -13,7 +13,7 @@
 
 const std::vector<const char*>& presetCategories()
 {
-    static const std::vector<const char*> c { "Univerzální", "Vokály", "Bicí", "Piano & klávesy", "Synthy",
+    static const std::vector<const char*> c { "Univerzální", "Prism", "Vokály", "Bicí", "Piano & klávesy", "Synthy",
                                               "Kytara", "Kreativní", "Mix busy" };
     return c;
 }
@@ -218,6 +218,65 @@ const std::vector<FactoryPreset>& factoryPresets()
             { "highCut", 12000 }, { "lowCut", 400 }, { "early", 20 }, { "reverbMix", 4 }, { "monoBass", 300 },
             { "eq1On", 1 }, { "eq1Type", 0 }, { "eq1Freq", 25 }, { "eq1Slope", 1 },
             { "eq7On", 1 }, { "eq7Type", 3 }, { "eq7Freq", 12000 }, { "eq7Gain", 1.5f }, { "eq7Q", 0.7f } } },
+        // ---------------------------------------------------------------- Prism (v0.6) – vlastni zvuk DeVerbu:
+        // kratke basy uprostred, dlouhe siroke plovouci vysky. Low cut 180+ Hz, rozumny mix, basy nikdy nezabahni.
+        { "Prism – výchozí", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 18 }, { "size", 105 },
+            { "decay", 2.4f }, { "highCut", 11000 }, { "lowCut", 180 }, { "mod", 35 }, { "early", 15 }, { "width", 110 },
+            { "reverbMix", 24 }, { "depth", 35 } } },
+        { "Prism – vokál v tempu", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelaySync", 1 }, { "preDelayDiv", 3 },
+            { "decaySync", 1 }, { "decayDiv", 1 }, { "size", 95 }, { "highCut", 12000 }, { "lowCut", 280 }, { "mod", 30 },
+            { "early", 8 }, { "reverbMix", 20 }, { "depth", 30 }, { "duckAmount", 45 }, { "duckRelease", 300 } } },
+        { "Prism – rap blízko", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 12 }, { "size", 60 },
+            { "decay", 0.9f }, { "highCut", 12000 }, { "lowCut", 320 }, { "mod", 20 }, { "early", 30 }, { "width", 90 },
+            { "reverbMix", 14 }, { "depth", 20 }, { "duckAmount", 35 } } },
+        { "Prism – piano sál", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 24 }, { "size", 130 },
+            { "decay", 3.2f }, { "highCut", 9500 }, { "lowCut", 160 }, { "mod", 25 }, { "early", 25 }, { "width", 115 },
+            { "reverbMix", 24 }, { "depth", 45 } } },
+        { "Prism – keys & rhodes", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 20 }, { "size", 100 },
+            { "decay", 2.2f }, { "highCut", 10000 }, { "lowCut", 220 }, { "mod", 45 }, { "early", 10 }, { "reverbMix", 26 },
+            { "depth", 40 }, { "chorusOn", 1 }, { "chorusRate", 0.45f }, { "chorusDepth", 30 }, { "chorusMix", 30 }, { "chainOrder", 72 } } },
+        { "Prism – pad nebe", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 40 }, { "size", 150 },
+            { "decay", 8.0f }, { "highCut", 14000 }, { "lowCut", 240 }, { "mod", 60 }, { "early", 0 }, { "shimmer", 22 },
+            { "width", 130 }, { "reverbMix", 38 }, { "depth", 60 } } },
+        { "Prism – snare vzduch", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 8 }, { "size", 80 },
+            { "decay", 1.2f }, { "highCut", 13000 }, { "lowCut", 350 }, { "mod", 20 }, { "early", 20 }, { "reverbMix", 18 },
+            { "depth", 30 } } },
+        { "Prism – kytara široká", "Prism", { { "reverbType", 5 }, { "preDelay", 20 }, { "size", 110 }, { "decay", 2.2f },
+            { "highCut", 9500 }, { "lowCut", 220 }, { "mod", 40 }, { "early", 15 }, { "reverbMix", 22 },
+            { "delayOn", 1 }, { "delaySync", 1 }, { "delayDiv", 7 }, { "delayFeedback", 25 }, { "delayTone", 4500 },
+            { "pingPong", 1 }, { "delayMix", 12 } } },
+        { "Prism – lo-fi beat", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 15 }, { "size", 90 },
+            { "decay", 1.6f }, { "highCut", 8000 }, { "lowCut", 260 }, { "mod", 50 }, { "early", 10 }, { "reverbMix", 26 },
+            { "lofiOn", 1 }, { "lofiBits", 11 }, { "lofiRate", 22000 }, { "lofiTone", 7500 }, { "lofiMix", 40 }, { "outGain", -2 } } },
+        { "Prism – drone (zapni FREEZE)", "Prism", { { "reverbType", 5 }, { "delayOn", 0 }, { "size", 150 }, { "decay", 12.0f },
+            { "highCut", 12000 }, { "lowCut", 200 }, { "mod", 70 }, { "early", 0 }, { "shimmer", 15 }, { "width", 125 },
+            { "reverbMix", 50 }, { "depth", 55 } } },
+        { "Prism – bus vzduch", "Mix busy", { { "reverbType", 5 }, { "delayOn", 0 }, { "preDelay", 10 }, { "size", 70 },
+            { "decay", 1.1f }, { "highCut", 16000 }, { "lowCut", 400 }, { "mod", 20 }, { "early", 0 }, { "reverbMix", 9 },
+            { "depth", 15 }, { "monoBass", 300 } } },
+
+        // ---------------------------------------------------------------- Nove v0.6 (overene mereni: cisty spodek, rozumna hlasitost)
+        { "Vokál – moderní plate", "Vokály", { { "reverbType", 0 }, { "delayOn", 0 }, { "preDelay", 30 }, { "size", 85 },
+            { "decay", 1.6f }, { "highCut", 9000 }, { "lowCut", 300 }, { "mod", 25 }, { "early", 0 }, { "reverbMix", 20 },
+            { "depth", 30 }, { "duckAmount", 45 }, { "duckRelease", 250 }, { "decayEqOn", 1 }, { "dq1Mult", 0.5f } } },
+        { "Vokál – slapback + room", "Vokály", { { "delaySync", 0 }, { "delayTime", 110 }, { "delayFeedback", 0 },
+            { "delayTone", 3500 }, { "delayMix", 18 }, { "reverbType", 1 }, { "size", 50 }, { "decay", 0.7f }, { "preDelay", 5 },
+            { "highCut", 8000 }, { "lowCut", 250 }, { "early", 35 }, { "reverbMix", 12 }, { "depth", 25 } } },
+        { "Snare – 80s plate", "Bicí", { { "reverbType", 0 }, { "delayOn", 0 }, { "preDelay", 5 }, { "size", 95 },
+            { "decay", 1.4f }, { "highCut", 8000 }, { "lowCut", 350 }, { "mod", 15 }, { "early", 0 }, { "reverbMix", 26 },
+            { "depth", 30 } } },
+        { "Piano – Abbey chamber", "Piano & klávesy", { { "reverbType", 2 }, { "delayOn", 0 }, { "preDelay", 15 }, { "size", 85 },
+            { "decay", 1.6f }, { "highCut", 7000 }, { "lowCut", 200 }, { "mod", 15 }, { "early", 30 }, { "reverbMix", 20 },
+            { "depth", 35 }, { "decayEqOn", 1 }, { "dq1Mult", 0.7f }, { "dq4Mult", 0.7f } } },
+        { "Kytara – surf spring", "Kytara", { { "reverbType", 4 }, { "delayOn", 0 }, { "preDelay", 0 }, { "decay", 2.4f },
+            { "highCut", 6000 }, { "lowCut", 200 }, { "reverbMix", 30 }, { "depth", 30 } } },
+        { "Lead – trap throw 1/4", "Synthy", { { "delaySync", 1 }, { "delayDiv", 8 }, { "delayFeedback", 35 },
+            { "delayTone", 5000 }, { "pingPong", 1 }, { "delayMix", 22 }, { "duckAmount", 70 }, { "duckRelease", 300 },
+            { "reverbType", 3 }, { "size", 120 }, { "decay", 2.8f }, { "lowCut", 300 }, { "highCut", 9000 }, { "reverbMix", 18 } } },
+        { "Kytara – ambient nekonečno", "Kytara", { { "delaySync", 1 }, { "delayDiv", 10 }, { "delayFeedback", 45 },
+            { "delayTone", 4000 }, { "pingPong", 1 }, { "delayMix", 22 }, { "reverbType", 3 }, { "size", 145 }, { "decay", 9.0f },
+            { "highCut", 8000 }, { "lowCut", 250 }, { "mod", 55 }, { "shimmer", 20 }, { "reverbMix", 35 }, { "depth", 60 },
+            { "chorusOn", 1 }, { "chorusRate", 0.3f }, { "chorusDepth", 35 }, { "chorusMix", 30 }, { "chainOrder", 72 } } },
     };
     return list;
 }

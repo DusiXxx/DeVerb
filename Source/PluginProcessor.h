@@ -61,7 +61,7 @@ public:
 
     // --- pro GUI ---
     dusi::Params currentParams() const;                    // aktualni hodnoty bez vedlejsich efektu
-    int  readAnalyzer (float* dest, int maxSamples);       // posledni vzorky vystupu pro analyzator
+    int  readAnalyzer (float* dest, int maxSamples, bool reverbTail = false);   // posledni vzorky (vystup / jen dozvuk)
     std::atomic<bool> eco { false };
 
     // Hodnoty pro GUI (zapisuje audio vlakno, cte editor)
@@ -99,6 +99,8 @@ private:
     static constexpr int kFifoSize = 16384;
     juce::AbstractFifo fifo { kFifoSize };
     std::vector<float> fifoData = std::vector<float> (kFifoSize, 0.0f);
+    juce::AbstractFifo tailFifo { kFifoSize };
+    std::vector<float> tailData = std::vector<float> (kFifoSize, 0.0f);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DusiVerbProcessor)
 };

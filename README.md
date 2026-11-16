@@ -1,4 +1,4 @@
-# DusiX DeVerb v0.5
+# DusiX DeVerb v0.6
 
 Delay, reverb, filtr s LFO, chorus a lo-fi, 3D prostor, EQ ve stylu FabFilter a prohlížeč presetů. Formát **Audio Unit** (Logic Pro) + VST3 + samostatná aplikace.
 
@@ -10,7 +10,14 @@ Delay, reverb, filtr s LFO, chorus a lo-fi, 3D prostor, EQ ve stylu FabFilter a 
 
 Kamarádovi stačí poslat zip z GitHubu (Releases) – uvnitř je návod `JAK NAINSTALOVAT.txt`, žádný Terminál.
 
-## Aktualizace z GitHubu (nové ve v0.5)
+## Nové ve v0.6
+- **PRISM** – vlastní dozvuk DeVerbu (EFEKTY → REVERB → TYP). Dozvuk se rozloží jako světlo hranolem: basy doznívají krátce a drží se uprostřed (mix nezabahní), výšky zní dlouho, jsou široké a jemně „plavou“ mezi L a P. CHARACTER (MOD) určuje, jak moc plavou. 11 presetů v kategorii **Prism**.
+- **PROSTOR jako ve FabFilter Pro-R:** velký knob **SPACE** nastaví velikost prostoru i délku dozvuku najednou (Kabina → Studio → … → Katedrála), vedle **BRIGHTNESS** (High Cut), **CHARACTER** (Mod), **DISTANCE** (Hloubka) a **WIDTH**.
+- **EQ:** křivka se září, plné spektrum, panel vybraného pásma (frekvence, zisk, Q). Režim **DOZVUK** ukazuje délku dozvuku v sekundách pro každou frekvenci, čárkovaně skutečnou délku i s High Cut a fialově živé spektrum samotného dozvuku.
+- Čistší basy: low cut dozvuku 12 dB/okt., do ozvěny delaye nejdou hluboké basy (pod 150 Hz).
+- 18 nových presetů, všechny presety prošly měřením (hlasitost, bahno v basech, mono, špičky).
+
+## Aktualizace z GitHubu (od v0.5)
 
 Vedle loga je **tlačítko verze** (`v0.5.0 · aktuální ✓`). Plugin se sám podívá na GitHub nejvýš jednou za 6 hodin, klik = zkontrolovat hned.
 - **AKTUALIZOVAT x.y.z** (zelené) → klik stáhne novou verzi a ověří ji (velikost + SHA-256).

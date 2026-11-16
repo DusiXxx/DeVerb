@@ -197,8 +197,8 @@ void DusiLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int
                                  float sliderPos, float startAngle, float endAngle, juce::Slider& slider)
 {
     const float S = (float) juce::jmin (width, height);
-    const float r = S >= 70.0f ? 22.0f : S >= 60.0f ? 18.0f : S >= 50.0f ? 13.0f : S * 0.25f;
-    const float ti = S >= 60.0f ? 8.0f : 7.0f;
+    const float r = S >= 76.0f ? 27.0f : S >= 70.0f ? 22.0f : S >= 60.0f ? 18.0f : S >= 50.0f ? 13.0f : S * 0.25f;
+    const float ti = S >= 76.0f ? 9.0f : S >= 60.0f ? 8.0f : 7.0f;
     const juce::Point<float> c { (float) x + (float) width * 0.5f, (float) y + (float) height * 0.5f };
     const auto accent = slider.findColour (juce::Slider::rotarySliderFillColourId);
     const bool off   = (bool) slider.getProperties().getWithDefault ("off", false);

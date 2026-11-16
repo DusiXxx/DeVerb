@@ -17,7 +17,7 @@ public:
     explicit EqView (DusiVerbProcessor&);
     ~EqView() override;
 
-    void setMode (Mode m) { mode = m; selected = -1; repaint(); }
+    void setMode (Mode m);
     Mode getMode() const  { return mode; }
 
     void paint (juce::Graphics&) override;
@@ -38,8 +38,13 @@ private:
     float xToFreq (float x) const;
     float dbToY (float db) const;
     float yToDb (float y) const;
-    float multToY (float m) const { return dbToY (std::log2 (m) * 9.0f); }   // x4 = +18 dB polohy
-    float yToMult (float y) const { return std::pow (2.0f, yToDb (y) / 9.0f); }
+    // rezim DOZVUK: osa Y = delka dozvuku v sekundach (log 0.1 .. 30 s)
+    float secToY (float s) const;
+    float yToSec (float y) const;
+    float rtBase() const;                 // zakladni delka dozvuku (DECAY)
+    float tiltOf (int band) const;        // PRISM: vestaveny naklon (kratke basy, dlouhe vysky)
+    float effectiveRt (float f, const dusi::Params&, const dusi::DecayEqDesign&, float rt) const;   // vcetne tlumeni HIGH CUT
+    void drawBandPanel (juce::Graphics&);
 
     // parametry
     float value (const juce::String& id) const;
@@ -57,6 +62,7 @@ private:
 
     void drawGrid (juce::Graphics&);
     void drawAnalyzer (juce::Graphics&);
+    void resetSpectrum();
     void drawOutputCurve (juce::Graphics&, bool active);
     void drawDecayCurve (juce::Graphics&, bool active);
     void drawNodes (juce::Graphics&);

@@ -21,7 +21,8 @@ public:
         side.prepare (sampleRate, 50.0f);
         enable.prepare (sampleRate, 15.0f);
         comp.prepare (sampleRate);
-        hpCoef = std::exp (-2.0f * kPi * 80.0f / sr);
+        hpCoef = std::exp (-2.0f * kPi * 120.0f / sr);   // low-cut opakovani (cistsi basy)
+        for (auto& h : inHp) h.set (150.0f, sr);          // do ozveny nejdou hluboke basy (kopak, bas)
         first = true;
         reset();
     }
@@ -31,6 +32,7 @@ public:
         for (auto& l : lines) l.clear();
         lp[0] = lp[1] = hp[0] = hp[1] = 0.0f;
         sideHp.reset();
+        inHp[0].reset(); inHp[1].reset();
     }
 
     void setParams (const Params& p, float autoGain)
@@ -72,15 +74,16 @@ public:
         // filtry ve zpetne vazbe: kazde opakovani je o neco temnejsi a tenci
         const float fl = filter (dl, 0), fr = filter (dr, 1);
 
+        const float il = inHp[0].process (l), ir = inHp[1].process (r);
         if (pingPong)
         {
-            lines[0].write (0.5f * (l + r) + fastTanh (g * fr));
+            lines[0].write (0.5f * (il + ir) + fastTanh (g * fr));
             lines[1].write (fastTanh (g * fl));
         }
         else
         {
-            lines[0].write (l + fastTanh (g * fl));
-            lines[1].write (r + fastTanh (g * fr));
+            lines[0].write (il + fastTanh (g * fl));
+            lines[1].write (ir + fastTanh (g * fr));
         }
 
         // stereo pojistka na mokrem signalu: basy do mona + auto zuzeni
@@ -111,12 +114,12 @@ private:
     float filter (float x, int ch)
     {
         lp[ch] = x + lpCoef * (lp[ch] - x);          // high-cut
-        hp[ch] = lp[ch] + hpCoef * (hp[ch] - lp[ch]); // low-cut 80 Hz
+        hp[ch] = lp[ch] + hpCoef * (hp[ch] - lp[ch]); // low-cut 120 Hz
         return lp[ch] - hp[ch];
     }
 
     DelayLine lines[2];
-    HighPass sideHp;
+    HighPass sideHp, inHp[2];
     Smooth time, fb, dry, wet, side, enable;
     float sr = 48000.0f, lpCoef = 0.0f, hpCoef = 0.0f;
     float lp[2] {}, hp[2] {};

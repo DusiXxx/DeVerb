@@ -2,17 +2,114 @@
 
 using ui::U;
 
+//==============================================================================
+namespace
+{
+float spaceFromSize (float sizePct)   { return juce::jlimit (0.0f, 1.0f, (sizePct - 30.0f) / 120.0f); }
+float sizeFromSpace (float s)         { return 30.0f + 120.0f * s; }
+float decayFromSpace (float s)        { return 0.3f * std::pow (40.0f, s); }   // 0.3 s .. 12 s
+}
+
+SpaceMacro::SpaceMacro (DusiVerbProcessor& p) : proc (p)
+{
+    knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    knob.setRotaryParameters (juce::degreesToRadians (-135.0f), juce::degreesToRadians (135.0f), true);
+    knob.setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+    knob.setRange (0.0, 1.0, 0.0);
+    knob.setColour (juce::Slider::rotarySliderFillColourId, ui::verb);
+    knob.setDoubleClickReturnValue (true, spaceFromSize (100.0f));
+    knob.setTooltip (U ("SPACE: velikost prostoru i délka dozvuku jedním knobem (jako ve FabFilter Pro-R). "
+                        "Jemně doladíš SIZE a DECAY na stránce EFEKTY."));
+    knob.onDragStart = [this]
+    {
+        dragging = true;
+        for (auto* id : { "size", "decay" })
+            if (auto* prm = proc.apvts.getParameter (id)) prm->beginChangeGesture();
+    };
+    knob.onValueChange = [this] { if (dragging || knob.isMouseButtonDown()) apply ((float) knob.getValue()); };
+    knob.onDragEnd = [this]
+    {
+        dragging = false;
+        for (auto* id : { "size", "decay" })
+            if (auto* prm = proc.apvts.getParameter (id)) prm->endChangeGesture();
+    };
+    addAndMakeVisible (knob);
+    refresh();
+}
+
+SpaceMacro::~SpaceMacro()
+{
+    if (dragging) knob.onDragEnd();
+}
+
+juce::String SpaceMacro::roomName (float s)
+{
+    const char* names[] = { "Kabina", "Studio", "Místnost", "Komora", "Sál", "Velký sál", "Katedrála" };
+    const float edges[] = { 0.12f, 0.28f, 0.42f, 0.56f, 0.72f, 0.88f };
+    int i = 0;
+    while (i < 6 && s >= edges[i]) ++i;
+    return U (names[i]);
+}
+
+void SpaceMacro::apply (float s)
+{
+    for (auto [id, v] : { std::pair<const char*, float> { "size", sizeFromSpace (s) }, { "decay", decayFromSpace (s) } })
+        if (auto* prm = proc.apvts.getParameter (id))
+            prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+}
+
+void SpaceMacro::refresh()
+{
+    const float s = spaceFromSize (proc.apvts.getRawParameterValue ("size")->load());
+    if (! dragging && std::abs (s - shownS) > 1.0e-4f)
+    {
+        knob.setValue (s, juce::dontSendNotification);
+        shownS = s;
+    }
+    const bool synced = proc.apvts.getRawParameterValue ("decaySync")->load() > 0.5f;
+    const float dec = proc.uiDecaySec.load() > 0.0f ? proc.uiDecaySec.load() : proc.apvts.getRawParameterValue ("decay")->load();
+    const auto text = roomName ((float) knob.getValue()) + U (" · ") + juce::String (dec, dec < 10.0f ? 2 : 1) + " s"
+                      + (synced ? U (" ♩") : juce::String());
+    if (text != shownText) { shownText = text; repaint(); }
+}
+
+void SpaceMacro::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds();
+    g.setColour (ui::textDim);
+    g.setFont (ui::font (11.0f, 500, 0.06f));
+    g.drawText ("SPACE", r.removeFromTop (14), juce::Justification::centred);
+    g.setColour (ui::text);
+    g.setFont (ui::font (13.0f, 600));
+    g.drawText (shownText, r.removeFromBottom (16), juce::Justification::centred);
+}
+
+void SpaceMacro::resized()
+{
+    knob.setBounds (getLocalBounds().withTrimmedTop (16).withTrimmedBottom (18));
+}
+
+//==============================================================================
 MainPage::MainPage (DusiVerbProcessor& p)
     : proc (p), space (p), eqView (p),
+      spaceMacro (p),
+      brightness (*this, p.apvts, "highCut", "BRIGHTNESS", ui::verb,  Knob::Size::md),
+      character  (*this, p.apvts, "mod",     "CHARACTER",  ui::verb,  Knob::Size::md),
+      distance   (*this, p.apvts, "depth",   "DISTANCE",   ui::space, Knob::Size::md),
+      width      (*this, p.apvts, "width",   "WIDTH",      ui::space, Knob::Size::md),
       pan      (*this, p.apvts, "pan",      "PAN",       ui::space,  Knob::Size::md),
-      width    (*this, p.apvts, "width",    U ("ŠÍŘKA"), ui::space,  Knob::Size::md),
       monoBass (*this, p.apvts, "monoBass", "BASS MONO", ui::space,  Knob::Size::md),
       outGain  (*this, p.apvts, "outGain",  "OUTPUT",    ui::output, Knob::Size::md),
-      outMode (U ("VÝSTUP")), decayMode ("DECAY"),
+      outMode (U ("VÝSTUP")), decayMode ("DOZVUK"),
       eqPower (ui::eq), decayPower (ui::verb)
 {
     setOpaque (true);
+    addAndMakeVisible (spaceMacro);
     addAndMakeVisible (space);
+    brightness.slider.setTooltip (U ("BRIGHTNESS: jas dozvuku – jak rychle v něm doznívají výšky (High Cut)"));
+    character.slider.setTooltip (U ("CHARACTER: živost dozvuku – jemné vlnění a hustota (Modulation)"));
+    distance.slider.setTooltip (U ("DISTANCE: jak daleko zvuk stojí – víc dozvuku, tmavší a tišší přímý zvuk"));
+    width.slider.setTooltip (U ("WIDTH: šířka dozvuku (SAFE ji hlídá podle prostoru)"));
     addAndMakeVisible (eqView);
 
     safeButton.setClickingTogglesState (true);
@@ -30,7 +127,7 @@ MainPage::MainPage (DusiVerbProcessor& p)
     outMode.setColour (juce::TextButton::buttonOnColourId, ui::eq);
     decayMode.setColour (juce::TextButton::buttonOnColourId, ui::verb);
     outMode.setTooltip (U ("Výstupní EQ – barva celého zvuku (8 pásem)"));
-    decayMode.setTooltip (U ("Decay EQ – jak dlouho dozvuk zní v basech, středech a výškách (jako Pro-R)"));
+    decayMode.setTooltip (U ("DOZVUK – délka dozvuku v sekundách pro každou frekvenci + živé spektrum dozvuku (jako Pro-R). Body = decay EQ."));
     outMode.setToggleState (true, juce::dontSendNotification);
     outMode.onClick   = [this] { setEqMode (EqView::Mode::output); };
     decayMode.onClick = [this] { setEqMode (EqView::Mode::decay); };
@@ -66,6 +163,7 @@ int MainPage::tempoHighlightKey() const
 void MainPage::timerCallback()
 {
     if (! isShowing()) return;
+    spaceMacro.refresh();
     const float corr = proc.uiCorrelation.load(), ag = proc.uiAutoGain.load();
     if (std::abs (corr - shownCorrelation) > 0.005f || std::abs (ag - shownAutoGain) > 0.005f)
     {
@@ -86,6 +184,13 @@ void MainPage::timerCallback()
 void MainPage::paint (juce::Graphics& g)
 {
     g.fillAll (ui::background);
+    ui::paintPanel (g, spacePanel, "PROSTOR", ui::space, 36);
+    g.setColour (ui::textDim);
+    g.setFont (ui::font (11.0f, 500));
+    g.drawText (U ("táhni zvuk · úchyty / kolečko = šířka · dvojklik = střed"),
+                spacePanel.withHeight (36).reduced (12, 0), juce::Justification::centredRight);
+    g.setColour (ui::line);
+    g.drawVerticalLine (spaceMacro.getRight() + 8, (float) spaceMacro.getY() + 6.0f, (float) spaceMacro.getBottom() - 6.0f);
     ui::paintPanel (g, stereoPanel, "STEREO", ui::space, ui::smallTitle);
     ui::paintPanel (g, tempoPanel, "TEMPO", ui::text, 32);
     ui::paintPanel (g, eqPanel, "EQ", ui::eq, 44);
@@ -212,7 +317,13 @@ void MainPage::paintTempo (juce::Graphics& g)
 
 void MainPage::resized()
 {
-    space.setBounds (12, 8, 600, 344);
+    spacePanel = { 12, 8, 600, 344 };
+    spaceMacro.setBounds (24, 42, 132, 112);
+    {
+        int x = spaceMacro.getRight() + 24;
+        for (auto* k : { &brightness, &character, &distance, &width }) { k->setTopLeft (x, 48); x += 104; }
+    }
+    space.setBounds (25, 160, 574, 180);
     stereoPanel = { 620, 8, 328, 208 };
     tempoPanel  = { 620, 224, 328, 128 };
     eqPanel     = { 12, 360, 936, 300 };
@@ -221,9 +332,9 @@ void MainPage::resized()
     safeButton.setBounds (stereoPanel.getRight() - 10 - 52, stereoPanel.getY() + 6, 52, 22);
     {
         const int x0 = stereoPanel.getX() + 10, w = stereoPanel.getWidth() - 20;
-        const int step = (w - Knob::cellWidth (Knob::Size::md)) / 3;
+        const int step = (w - Knob::cellWidth (Knob::Size::md)) / 2;
         int i = 0;
-        for (auto* k : { &pan, &width, &monoBass, &outGain })
+        for (auto* k : { &pan, &monoBass, &outGain })
             k->setTopLeft (x0 + step * i++, stereoPanel.getY() + ui::smallTitle);
         meterArea = { x0, stereoPanel.getY() + ui::smallTitle + 98 + 8, 302, 58 };
     }
@@ -233,7 +344,7 @@ void MainPage::resized()
     outMode.setBounds (x, by, 78, 28);
     eqPower.setBounds (outMode.getRight() - 1, by, 28, 28);
     x = eqPower.getRight() + 8;
-    decayMode.setBounds (x, by, 70, 28);
+    decayMode.setBounds (x, by, 78, 28);
     decayPower.setBounds (decayMode.getRight() - 1, by, 28, 28);
     eqView.setBounds (eqPanel.getX() + 12, eqPanel.getY() + 44, eqPanel.getWidth() - 24, eqPanel.getHeight() - 44 - 12);
 }

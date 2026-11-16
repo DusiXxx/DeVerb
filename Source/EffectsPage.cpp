@@ -139,10 +139,10 @@ public:
         freeze.setTooltip (U ("Zmrazí dozvuk – hraje donekonečna, nový zvuk už do něj nejde"));
         addAndMakeVisible (freeze);
         freezeAtt = std::make_unique<APVTS::ButtonAttachment> (p.apvts, "freeze", freeze);
-        type.box.setTooltip (U ("Plate = hladký kovový, Room = místnost, Chamber = hustá komora, Hall = sál, Spring = pružina"));
+        type.box.setTooltip (U ("Plate = hladký kovový, Room = místnost, Chamber = hustá komora, Hall = sál, Spring = pružina, Prism = vlastní zvuk DeVerbu: krátké basy uprostřed, dlouhé široké plovoucí výšky"));
         early.slider.setTooltip (U ("První odrazy od stěn – počítají se z 3D místnosti na stránce PROSTOR"));
         shimmer.slider.setTooltip (U ("Oktáva nahoru ve zpětné vazbě – zářivé ambientní plochy"));
-        typeCaption = addCaption (U ("Plate · Room · Chamber · Hall · Spring"));
+        typeCaption = addCaption (U ("Plate · Room · Chamber · Hall · Spring · Prism"));
         hintCaption = addCaption (U ("decay = délka noty − pre-delay"));
     }
 

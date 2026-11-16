@@ -5,7 +5,27 @@
 #include "SpaceView.h"
 #include "EqView.h"
 
-// Hlavni stranka: PROSTOR (3D) + STEREO + TEMPO nahore, EQ dole
+// SPACE (jako ve FabFilter Pro-R): jeden velky knob = velikost mistnosti i delka dozvuku najednou
+class SpaceMacro : public juce::Component
+{
+public:
+    explicit SpaceMacro (DusiVerbProcessor&);
+    ~SpaceMacro() override;
+    void refresh();                      // z parametru (volano casovacem)
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    static juce::String roomName (float s);
+
+private:
+    void apply (float s);
+    DusiVerbProcessor& proc;
+    juce::Slider knob;
+    bool dragging = false;
+    juce::String shownText;
+    float shownS = -1.0f;
+};
+
+// Hlavni stranka: PROSTOR (SPACE + Pro-R knoby + 3D) + STEREO + TEMPO nahore, EQ dole
 class MainPage : public juce::Component, private juce::Timer
 {
 public:
@@ -27,7 +47,9 @@ private:
     juce::Rectangle<int> stereoPanel, tempoPanel, eqPanel, meterArea, tempoArea;
     juce::Rectangle<int> spacePanel;
 
-    Knob pan, width, monoBass, outGain;
+    SpaceMacro spaceMacro;
+    Knob brightness, character, distance, width;
+    Knob pan, monoBass, outGain;
     juce::TextButton safeButton { "SAFE" };
     std::unique_ptr<APVTS::ButtonAttachment> safeAtt;
 

@@ -291,16 +291,26 @@ public:
         static const float room[N]    = { 11.3f, 13.9f, 16.7f, 19.3f, 22.1f, 24.7f, 27.9f, 31.3f };
         static const float chamber[N] = { 19.7f, 23.9f, 28.3f, 32.9f, 37.3f, 41.9f, 46.7f, 51.1f };
         static const float hall[N]    = { 37.1f, 44.3f, 52.9f, 59.3f, 67.1f, 76.3f, 84.7f, 97.1f };
-        static const float dRoom[4] = { 1.1f, 1.7f, 2.9f, 3.7f }, dCham[4] = { 1.5f, 2.3f, 4.1f, 5.3f }, dHall[4] = { 3.1f, 4.7f, 7.9f, 11.3f };
-        const float* base = t == ReverbType::room ? room : (t == ReverbType::hall ? hall : chamber);
-        const float* dif  = t == ReverbType::room ? dRoom : (t == ReverbType::hall ? dHall : dCham);
+        static const float prism[N]   = { 23.3f, 29.9f, 35.7f, 43.1f, 50.3f, 58.7f, 66.1f, 74.9f };
+        static const float dRoom[4] = { 1.1f, 1.7f, 2.9f, 3.7f }, dCham[4] = { 1.5f, 2.3f, 4.1f, 5.3f },
+                           dHall[4] = { 3.1f, 4.7f, 7.9f, 11.3f }, dPrism[4] = { 2.3f, 3.9f, 6.1f, 8.9f };
+        const float* base = room;
+        const float* dif = dRoom;
+        diffG = 0.62f;
+        outScale = 0.385f;
+        switch (t)
+        {
+            case ReverbType::hall:    base = hall;    dif = dHall;  diffG = 0.72f; outScale = 0.65f;  break;
+            case ReverbType::chamber: base = chamber; dif = dCham;  diffG = 0.62f; outScale = 0.475f; break;
+            case ReverbType::prism:   base = prism;   dif = dPrism; diffG = 0.70f; outScale = kPrismScale; break;
+            default: break;
+        }
         for (int i = 0; i < N; ++i) baseLen[i] = base[i] * 0.001f * sr;
         for (int i = 0; i < 4; ++i) diffLen[i] = dif[i] * 0.001f * sr;
-        diffG = t == ReverbType::hall ? 0.72f : 0.62f;
         eqVersion = -1;
-        outScale = t == ReverbType::room ? 0.385f : (t == ReverbType::hall ? 0.65f : 0.475f);
         reset();
     }
+    static constexpr float kPrismScale = 0.42f;
 
     void reset()
     {
@@ -620,6 +630,82 @@ private:
 //==============================================================================
 // Cely reverb modul: pre-delay -> (early reflections + pozdni dozvuk zvoleneho typu)
 // -> low cut, bass mono, sirka, naklon -> mix s primym zvukem (hloubka) -> vypinac
+//==============================================================================
+// PRISM (vlastni zvuk DeVerbu): dozvuk se rozlozi na pasma jako svetlo hranolem.
+//  - basy doznivaji kratce a drzi se uprostred (mix nezabahni)
+//  - stredy normalne
+//  - vysky doznivaji dele, jsou siroke, jemne "plavou" (pomaly pitch drift) a pomalu se preleji L <-> P
+// Delka dozvuku po pasmech se nastavi pres decay EQ (prismDecayParams), tady je jen prostorove rozlozeni.
+inline Params prismDecayParams (const Params& p)
+{
+    if (p.reverbType != ReverbType::prism) return p;
+    Params q = p;
+    static const float tilt[kNumDecayBands] = { 0.5f, 0.85f, 1.15f, 1.45f };
+    for (int i = 0; i < kNumDecayBands; ++i)
+        q.decayEq[(size_t) i].mult = (p.decayEqOn ? p.decayEq[(size_t) i].mult : 1.0f) * tilt[i];
+    q.decayEqOn = true;
+    return q;
+}
+
+class PrismStage
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = (float) sampleRate;
+        sideC = BiquadCoefs::highPass (220.0f, 0.7071f, sr);
+        highC = BiquadCoefs::highPass (2600.0f, 0.7071f, sr);
+        for (auto& d : drift) d.prepare ((int) (0.03f * sr) + 8);
+        depth.prepare (sampleRate, 100.0f);
+        reset();
+    }
+    void reset()
+    {
+        for (auto& b : sideS) b.reset();
+        for (auto& b : highS) b.reset();
+        for (auto& d : drift) d.clear();
+        phDrift = 0.0f; phPan = 0.0f;
+    }
+    void setMod (float mod) { depth.set ((0.4f + 1.6f * std::clamp (mod, 0.0f, 1.0f)) * 0.001f * sr); }
+
+    void process (float& l, float& r)
+    {
+        // basy do mona: ze stranoveho signalu se odstrani vse pod ~220 Hz (24 dB/okt.)
+        {
+            const float m = 0.5f * (l + r);
+            const float sd = sideS[1].process (sideC, sideS[0].process (sideC, 0.5f * (l - r)));
+            l = m + sd;
+            r = m - sd;
+        }
+        const float hiL = highS[0].process (highC, l), hiR = highS[1].process (highC, r);
+        const float restL = l - hiL, restR = r - hiR;
+
+        // vysky: pomaly drift (L a P v protifazi) -> plovouci jas
+        phDrift += 2.0f * kPi * 0.13f / sr;  if (phDrift > 2.0f * kPi) phDrift -= 2.0f * kPi;
+        phPan   += 2.0f * kPi * 0.055f / sr; if (phPan > 2.0f * kPi) phPan -= 2.0f * kPi;
+        const float dep = depth.next(), base = 0.009f * sr;
+        drift[0].write (hiL);
+        drift[1].write (hiR);
+        float hl = drift[0].readCubic (base + dep * (1.0f + std::sin (phDrift)));
+        float hr = drift[1].readCubic (base + dep * (1.0f + std::cos (phDrift)));
+        // sirka vysek + pomale prelevani mezi L a P
+        const float hm = 0.5f * (hl + hr), hs = 0.5f * (hl - hr) * 1.2f;
+        const float pan = 0.28f * std::sin (phPan);
+        hl = (hm + hs) * (1.0f - pan);
+        hr = (hm - hs) * (1.0f + pan);
+
+        l = restL + hl;
+        r = restR + hr;
+    }
+
+private:
+    BiquadCoefs sideC, highC;
+    BiquadState sideS[2], highS[2];
+    DelayLine drift[2];
+    Smooth depth;
+    float sr = 48000.0f, phDrift = 0.0f, phPan = 0.0f;
+};
+
 class ReverbUnit
 {
 public:
@@ -629,11 +715,13 @@ public:
     {
         sr = (float) sampleRate;
         preDelay.prepare ((int) ((kMaxPreDelaySec + 0.01f) * sr));
+        lastLowCut = -1.0f;   // koeficienty low-cut znovu pro novou vzorkovaci frekvenci
         plate.prepare (sampleRate);
         fdn.prepare (sampleRate);
         fdn.setType (ReverbType::room);
         spring.prepare (sampleRate);
         er.prepare (sampleRate);
+        prismStage.prepare (sampleRate);
         shifter.prepare (sampleRate);
         comp.prepare (sampleRate);
         freezeIn.prepare (sampleRate, 40.0f);
@@ -658,9 +746,11 @@ public:
         fdn.reset();
         spring.reset();
         er.reset();
+        prismStage.reset();
         shifter.reset();
         sideHp.reset();
-        hp[0] = hp[1] = dryLp[0] = dryLp[1] = 0.0f;
+        lowCutS[0].reset(); lowCutS[1].reset();
+        dryLp[0] = dryLp[1] = 0.0f;
         shimmerFb = shimmerHp = 0.0f;
     }
 
@@ -675,7 +765,8 @@ public:
         const float preSec = std::clamp (p.preDelayMs * 0.001f * depth.preScale, 0.0f, kMaxPreDelaySec);
         pre.set (std::max (1.0f, preSec * sr));
 
-        eqDesign.compute (p, rt, sr);
+        eqDesign.compute (prismDecayParams (p), rt, sr);   // PRISM: kratke basy, dlouhe vysky
+        prismStage.setMod (p.mod);
         LateConfig c;
         c.size = p.size;
         c.rt = rt;
@@ -694,13 +785,16 @@ public:
             case ReverbType::room:
             case ReverbType::chamber:
             case ReverbType::hall:
+            case ReverbType::prism:
             default:                 fdn.configure (c); break;
         }
 
         er.setGeometry (p.pan, p.depth, p.size, p.highCut);
         early.set (std::clamp (p.early, 0.0f, 1.0f) * 0.8f);
 
-        hpCoef    = std::exp (-2.0f * kPi * std::clamp (p.lowCut, 10.0f, 2000.0f) / sr);
+        // low-cut dozvuku 12 dB/okt. (cistsi basy nez puvodni 6 dB/okt.); koeficienty jen pri zmene
+        const float lc = std::clamp (p.lowCut, 10.0f, 2000.0f);
+        if (lc != lastLowCut) { lowCutC = BiquadCoefs::highPass (lc, 0.7071f, sr); lastLowCut = lc; }
         dryLpCoef = std::exp (-2.0f * kPi * std::min (depth.dryCutoff, 0.45f * sr) / sr);
         widthS.set (std::clamp (p.width, 0.0f, 1.5f) * autoGain);
         lean.set (0.5f * std::clamp (p.pan, -1.0f, 1.0f));
@@ -728,7 +822,7 @@ public:
 
     void process (float& l, float& r)
     {
-        if (asleep) return;
+        if (asleep) { lastTail = 0.0f; return; }
         const float inL = l, inR = r;
         const float e = enable.next();
 
@@ -741,7 +835,7 @@ public:
                 typeFade = 0.0f;
                 activeType = pendingType;
                 if (isFdn (activeType)) fdn.setType (activeType);
-                plate.reset(); spring.reset(); fdn.reset();
+                plate.reset(); spring.reset(); fdn.reset(); prismStage.reset();
                 switch (activeType)
                 {
                     case ReverbType::plate:  plate.configure (lastConfig); break;
@@ -749,6 +843,7 @@ public:
                     case ReverbType::room:
                     case ReverbType::chamber:
                     case ReverbType::hall:
+                    case ReverbType::prism:
                     default:                 fdn.configure (lastConfig); break;
                 }
             }
@@ -769,6 +864,7 @@ public:
             case ReverbType::room:
             case ReverbType::chamber:
             case ReverbType::hall:
+            case ReverbType::prism:
             default:                 fdn.process (xp, yl, yr); break;
         }
         // shimmer: dozvuk o oktavu vys se vraci zpet do reverbu
@@ -786,10 +882,12 @@ public:
             er.process (x, el, erv);   // prvni odrazy jen kdyz je EARLY > 0
         yl = (yl + eg * el) * typeFade;
         yr = (yr + eg * erv) * typeFade;
+        if (activeType == ReverbType::prism)
+            prismStage.process (yl, yr);
 
         // low-cut
-        hp[0] = yl + hpCoef * (hp[0] - yl);  yl -= hp[0];
-        hp[1] = yr + hpCoef * (hp[1] - yr);  yr -= hp[1];
+        yl = lowCutS[0].process (lowCutC, yl);
+        yr = lowCutS[1].process (lowCutC, yr);
 
         // sirka sterea + basy do mona
         const float mid = 0.5f * (yl + yr);
@@ -803,6 +901,7 @@ public:
         yr *= std::min (1.0f, 1.0f + ln);
 
         comp.process (yl, yr);   // komprese dozvuku
+        lastTail = 0.5f * (yl + yr);
 
         // primy zvuk: cim dal, tim tmavsi
         dryLp[0] = l + dryLpCoef * (dryLp[0] - l);
@@ -818,20 +917,23 @@ public:
     const DecayEqDesign& getDecayEq() const { return eqDesign; }
 
 private:
-    static bool isFdn (ReverbType t) { return t == ReverbType::room || t == ReverbType::chamber || t == ReverbType::hall; }
+    static bool isFdn (ReverbType t) { return t == ReverbType::room || t == ReverbType::chamber || t == ReverbType::hall || t == ReverbType::prism; }
 
     DelayLine preDelay;
     PlateLate plate;
     FdnLate fdn;
     SpringLate spring;
     EarlyReflections er;
+    PrismStage prismStage;
     DecayEqDesign eqDesign;
     HighPass sideHp;
     LateConfig lastConfig;
     Smooth pre, dry, wet, widthS, lean, early, enable;
     ReverbType activeType = ReverbType::plate, pendingType = ReverbType::plate;
-    float sr = 48000.0f, hpCoef = 0.0f, dryLpCoef = 0.0f, typeFade = 1.0f, fadeStep = 0.001f;
-    float hp[2] {}, dryLp[2] {};
+    float sr = 48000.0f, dryLpCoef = 0.0f, typeFade = 1.0f, fadeStep = 0.001f, lastLowCut = -1.0f;
+    BiquadCoefs lowCutC;
+    BiquadState lowCutS[2];
+    float dryLp[2] {};
     OctaveUp shifter;
     WetComp comp;
     Smooth freezeIn, shimmerGain;
@@ -840,5 +942,6 @@ private:
 
 public:
     float duckGain = 1.0f;   // nastavuje Engine kazdy vzorek
+    float lastTail = 0.0f;   // mokry signal (mono) pro analyzator dozvuku
 };
 } // namespace dusi

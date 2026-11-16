@@ -20,6 +20,7 @@ public:
     void prepare (double sampleRate)
     {
         sr = (float) sampleRate;
+        tail.assign (8192, 0.0f);
         delay.prepare (sampleRate);
         reverb.prepare (sampleRate);
         filter.prepare (sampleRate);
@@ -95,6 +96,7 @@ public:
             std::fill (left, left + numSamples, 0.0f);
             std::fill (right, right + numSamples, 0.0f);
             sleeping = true;
+            tailCount = 0;
             level = 0.0f;
             correlation = 1.0f;
             sLR = sLL = sRR = iLR = iLL = iRR = 0.0f;
@@ -102,6 +104,7 @@ public:
             return;
         }
         sleeping = false;
+        tailCount = std::min (numSamples, (int) tail.size());
 
         for (int start = 0; start < numSamples; start += OutputEq::kStep)
         {
@@ -158,6 +161,7 @@ public:
                 }
                 l[k] = a * orderFade;
                 r[k] = b * orderFade;
+                if (start + k < (int) tail.size()) tail[(size_t) (start + k)] = reverb.lastTail;
             }
 
             eq.processChunk (l, r, n);
@@ -182,6 +186,9 @@ public:
     }
 
     bool isSleeping() const { return sleeping; }
+    // mokry signal reverbu z posledniho bloku (pro analyzator dozvuku); pocet = min (blok, 8192), pri spanku 0
+    const float* getTail() const  { return tail.data(); }
+    int getTailCount() const      { return tailCount; }
 
     float getCorrelation() const  { return correlation; }  // -1 .. +1
     float getAutoGain() const     { return autoGain; }     // 1 = bez zasahu
@@ -211,6 +218,8 @@ private:
         autoGain = target + std::exp (-dt / tau) * (autoGain - target);
     }
 
+    std::vector<float> tail;
+    int tailCount = 0;
     StereoDelay delay;
     ReverbUnit reverb;
     LfoFilter filter;

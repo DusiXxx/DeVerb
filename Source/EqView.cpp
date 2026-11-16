@@ -21,7 +21,8 @@ EqView::EqView (DusiVerbProcessor& p) : processor (p)
     // parametry, ktere ovlivnuji krivky (ukazatele jednou, ne hledani podle jmena kazdy snimek)
     for (auto* prm : p.getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
-            if (r->paramID.startsWith ("eq") || r->paramID.startsWith ("dq") || r->paramID == "decayEqOn")
+            if (r->paramID.startsWith ("eq") || r->paramID.startsWith ("dq") || r->paramID == "decayEqOn"
+                || r->paramID == "reverbType" || r->paramID == "highCut" || r->paramID == "freeze" || r->paramID == "size")
                 watched.push_back (p.apvts.getRawParameterValue (r->paramID));
     setupFft (11);
     startTimerHz (20);
@@ -102,6 +103,66 @@ float EqView::yToDb (float y) const
     return (graph.getCentreY() - y) / (graph.getHeight() * 0.5f) * kDbRange;
 }
 
+namespace
+{
+constexpr float kSecMin = 0.1f, kSecMax = 30.0f;
+}
+
+float EqView::secToY (float sec) const
+{
+    const float t = std::log (juce::jlimit (kSecMin, kSecMax, sec) / kSecMin) / std::log (kSecMax / kSecMin);
+    return graph.getBottom() - t * graph.getHeight();
+}
+
+float EqView::yToSec (float y) const
+{
+    const float t = juce::jlimit (0.0f, 1.0f, (graph.getBottom() - y) / graph.getHeight());
+    return kSecMin * std::pow (kSecMax / kSecMin, t);
+}
+
+float EqView::rtBase() const
+{
+    return juce::jlimit (0.2f, 20.0f, processor.uiDecaySec.load() > 0.0f ? processor.uiDecaySec.load() : value ("decay"));
+}
+
+float EqView::tiltOf (int band) const
+{
+    static const float tilt[dusi::kNumDecayBands] = { 0.5f, 0.85f, 1.15f, 1.45f };
+    return (int) value ("reverbType") == (int) dusi::ReverbType::prism ? tilt[juce::jlimit (0, dusi::kNumDecayBands - 1, band)] : 1.0f;
+}
+
+// Skutecna delka dozvuku na frekvenci: decay EQ (vc. PRISM) + tlumeni vysek (HIGH CUT) v kazdem obehu smycky
+float EqView::effectiveRt (float f, const dusi::Params& p, const dusi::DecayEqDesign& d, float rt) const
+{
+    const float rtEq = rt * d.multiplierAt (f, rt);
+    if (p.freeze) return rtEq;
+    const float sr = (float) processor.getSampleRateForUi();
+    const float tau = 0.05f;                                              // prumerna delka obehu smycky
+    const float a = std::exp (-2.0f * juce::MathConstants<float>::pi * juce::jlimit (500.0f, 0.45f * sr, p.highCut) / sr)
+                  * juce::jmin (1.0f, tau / 0.33f);
+    const float w = 2.0f * juce::MathConstants<float>::pi * f / sr;
+    const std::complex<float> z = std::polar (1.0f, -w);
+    const float mag = std::abs ((1.0f - a) / (1.0f - a * z));
+    const float lossDbPerSec = -20.0f * std::log10 (juce::jmax (1.0e-6f, mag)) / tau;
+    return 1.0f / (1.0f / rtEq + lossDbPerSec / 60.0f);
+}
+
+void EqView::setMode (Mode m)
+{
+    if (m == mode) return;
+    mode = m;
+    selected = -1;
+    resetSpectrum();
+    bgCache = {};
+    repaint();
+}
+
+void EqView::resetSpectrum()
+{
+    std::fill (spectrum.begin(), spectrum.end(), -120.0f);
+    std::fill (history.begin(), history.end(), 0.0f);
+}
+
 bool EqView::isGainType (int band) const
 {
     const int t = (int) value (DusiVerbProcessor::eqId (band, "Type"));
@@ -122,7 +183,7 @@ juce::Point<float> EqView::nodePos (int index) const
         return { freqToX (f), dbToY (db) };
     }
     const float f = value (DusiVerbProcessor::dqId (index, "Freq"));
-    return { freqToX (f), multToY (value (DusiVerbProcessor::dqId (index, "Mult"))) };
+    return { freqToX (f), secToY (rtBase() * value (DusiVerbProcessor::dqId (index, "Mult")) * tiltOf (index)) };
 }
 
 int EqView::hitNode (juce::Point<float> p) const
@@ -234,33 +295,43 @@ void EqView::paint (juce::Graphics& g)
 void EqView::drawGrid (juce::Graphics& g)
 {
     g.setFont (ui::font (10.0f, 500));
-    const float freqs[] = { 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
-    const char* labels[] = { "50", "100", "200", "500", "1k", "2k", "5k", "10k" };
-    for (int i = 0; i < 8; ++i)
+    const float freqs[] = { 30, 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
+    const char* labels[] = { "30", "50", "100", "200", "500", "1k", "2k", "5k", "10k" };
+    for (int i = 0; i < 9; ++i)
     {
         const float x = freqToX (freqs[i]);
-        g.setColour (juce::Colour (0xff141d30));
+        const bool major = freqs[i] == 100 || freqs[i] == 1000 || freqs[i] == 10000;
+        g.setColour (major ? juce::Colour (0xff1e2a42) : juce::Colour (0xff141d30));
         g.drawVerticalLine ((int) x, graph.getY(), graph.getBottom());
         g.setColour (ui::textDim);
-        g.drawText (labels[i], juce::Rectangle<float> (40.0f, 16.0f).withCentre ({ x, graph.getBottom() + 10.0f }), juce::Justification::centred);
+        g.drawText (labels[i], juce::Rectangle<float> (40.0f, 16.0f).withCentre ({ x, graph.getBottom() + 12.0f }), juce::Justification::centred);
     }
 
-    for (int k = -2; k <= 2; ++k)
+    if (mode == Mode::output)
     {
-        const float db = (float) k * 6.0f * (mode == Mode::output ? 1.0f : 1.5f);
-        const float y = dbToY (db);
-        g.setColour (k == 0 ? juce::Colour (0xff2c3a56) : juce::Colour (0xff1e2a42));
-        g.drawHorizontalLine ((int) y, graph.getX(), graph.getRight());
-        juce::String label;
-        if (mode == Mode::output)
-            label = (k > 0 ? "+" : "") + juce::String ((int) db);
-        else
+        for (int k = -3; k <= 3; ++k)
         {
-            const char* m[] = { "×0.25", "×0.5", "×1", "×2", "×4" };
-            label = ui::U (m[k + 2]);
+            const float db = (float) k * 6.0f;
+            const float y = dbToY (db);
+            g.setColour (k == 0 ? juce::Colour (0xff2c3a56) : juce::Colour (0xff1a2438));
+            g.drawHorizontalLine ((int) y, graph.getX(), graph.getRight());
+            g.setColour (k == 0 ? ui::text2 : ui::textDim);
+            g.drawText ((k > 0 ? "+" : (k < 0 ? ui::U ("−") : juce::String())) + juce::String (std::abs ((int) db)),
+                        juce::Rectangle<float> (34.0f, 14.0f).withCentre ({ 20.0f, y }), juce::Justification::centred);
         }
-        g.setColour (mode == Mode::output ? ui::textDim : ui::verb.withAlpha (0.9f));
-        g.drawText (label, juce::Rectangle<float> (34.0f, 14.0f).withCentre ({ 20.0f, y }), juce::Justification::centred);
+        return;
+    }
+
+    // DOZVUK: sekundy (logaritmicky)
+    const float secs[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f };
+    const char* sl[] = { "0.25 s", "0.5 s", "1 s", "2 s", "4 s", "8 s", "16 s" };
+    for (int i = 0; i < 7; ++i)
+    {
+        const float y = secToY (secs[i]);
+        g.setColour (secs[i] == 1.0f ? juce::Colour (0xff24304a) : juce::Colour (0xff1a2438));
+        g.drawHorizontalLine ((int) y, graph.getX(), graph.getRight());
+        g.setColour (ui::verb.withAlpha (0.85f));
+        g.drawText (ui::U (sl[i]), juce::Rectangle<float> (38.0f, 14.0f).withCentre ({ 21.0f, y }), juce::Justification::centred);
     }
 }
 
@@ -270,10 +341,12 @@ void EqView::drawAnalyzer (juce::Graphics& g)
     const float sr = (float) processor.getSampleRateForUi();
     const int n = 1 << fftOrder;
     const float binHz = sr / (float) n;
+    const bool tail = mode == Mode::decay;
 
-    juce::Path p;
+    juce::Path line, fill;
     bool started = false;
-    for (float x = graph.getX(); x <= graph.getRight(); x += 3.0f)
+    float prev = graph.getBottom();
+    for (float x = graph.getX(); x <= graph.getRight() + 2.0f; x += 2.0f)
     {
         const float f = xToFreq (x);
         const float bin = f / binHz;
@@ -281,11 +354,22 @@ void EqView::drawAnalyzer (juce::Graphics& g)
         const float frac = juce::jlimit (0.0f, 1.0f, bin - (float) b0);
         float db = spectrum[(size_t) b0] + frac * (spectrum[(size_t) b0 + 1] - spectrum[(size_t) b0]);
         db += 4.5f * std::log2 (f / 1000.0f);                     // naklon 4.5 dB/okt jako u FabFilteru
-        const float y = juce::jmap (juce::jlimit (-90.0f, 6.0f, db), -90.0f, 6.0f, graph.getBottom(), graph.getY());
-        if (! started) { p.startNewSubPath (x, y); started = true; } else p.lineTo (x, y);
+        float y = juce::jmap (juce::jlimit (-90.0f, 6.0f, db), -90.0f, 6.0f, graph.getBottom(), graph.getY() + graph.getHeight() * 0.08f);
+        y = started ? prev + 0.55f * (y - prev) : y;              // vyhlazeni mezi sousedy
+        prev = y;
+        if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, graph.getBottom()); started = true; }
+        else line.lineTo (x, y);
+        fill.lineTo (x, y);
     }
-    g.setColour (ui::textDim.withAlpha (0.35f));
-    g.strokePath (p, juce::PathStrokeType (1.2f));
+    fill.lineTo (graph.getRight() + 2.0f, graph.getBottom());
+    fill.closeSubPath();
+
+    const auto col = tail ? ui::verb : juce::Colour (0xff8fb4e8);
+    g.setGradientFill (juce::ColourGradient (col.withAlpha (tail ? 0.26f : 0.20f), 0.0f, graph.getY() + graph.getHeight() * 0.3f,
+                                             col.withAlpha (0.02f), 0.0f, graph.getBottom(), false));
+    g.fillPath (fill);
+    g.setColour (col.withAlpha (tail ? 0.45f : 0.35f));
+    g.strokePath (line, juce::PathStrokeType (1.0f));
 }
 
 void EqView::drawOutputCurve (juce::Graphics& g, bool active)
@@ -306,80 +390,120 @@ void EqView::drawOutputCurve (juce::Graphics& g, bool active)
         if (! started) { p.startNewSubPath (x, y); started = true; } else p.lineTo (x, y);
     }
 
-    const float alpha = (active ? 1.0f : 0.3f) * (on ? 1.0f : 0.4f);
-    if (active)
+    if (! active)   // v rezimu DOZVUK jen jemny duch
     {
-        juce::Path fill (p);
-        fill.lineTo (graph.getRight(), dbToY (0));
-        fill.lineTo (graph.getX(), dbToY (0));
-        fill.closeSubPath();
-        g.setColour (ui::eq.withAlpha (0.10f * alpha));
-        g.fillPath (fill);
-
-        // krivka vybraneho pasma
-        if (selected >= 0 && params.eq[(size_t) selected].on)
-        {
-            juce::Path bp;
-            bool bpStarted = false;
-            for (float x = graph.getX(); x <= graph.getRight() + 1.0f; x += 3.0f)
-            {
-                const float y = dbToY (juce::jlimit (-kDbRange * 1.2f, kDbRange * 1.2f,
-                                                     dusi::eqBandMagnitudeDb (params.eq[(size_t) selected], xToFreq (x), sr)));
-                if (! bpStarted) { bp.startNewSubPath (x, y); bpStarted = true; } else bp.lineTo (x, y);
-            }
-            g.setColour (kBandColours[selected].withAlpha (0.5f));
-            g.strokePath (bp, juce::PathStrokeType (1.2f));
-        }
+        g.setColour (ui::eq.withAlpha (0.18f));
+        g.strokePath (p, juce::PathStrokeType (1.0f));
+        return;
     }
+
+    const float alpha = on ? 1.0f : 0.35f;
+    const float zeroY = dbToY (0);
+
+    // vybrane pasmo: barevna plocha mezi jeho krivkou a nulou (jako Pro-Q)
+    if (selected >= 0 && params.eq[(size_t) selected].on)
+    {
+        juce::Path bp;
+        bool bpStarted = false;
+        for (float x = graph.getX(); x <= graph.getRight() + 1.0f; x += 3.0f)
+        {
+            const float y = dbToY (juce::jlimit (-kDbRange * 1.2f, kDbRange * 1.2f,
+                                                 dusi::eqBandMagnitudeDb (params.eq[(size_t) selected], xToFreq (x), sr)));
+            if (! bpStarted) { bp.startNewSubPath (x, zeroY); bpStarted = true; }
+            bp.lineTo (x, y);
+        }
+        bp.lineTo (graph.getRight() + 1.0f, zeroY);
+        bp.closeSubPath();
+        g.setColour (kBandColours[selected].withAlpha (0.16f * alpha));
+        g.fillPath (bp);
+    }
+
+    // plocha celkove krivky: zare od krivky k nule
+    juce::Path fill (p);
+    fill.lineTo (graph.getRight() + 1.0f, zeroY);
+    fill.lineTo (graph.getX(), zeroY);
+    fill.closeSubPath();
+    const auto bounds = p.getBounds();
+    g.setGradientFill (juce::ColourGradient (ui::eq.withAlpha (0.20f * alpha), 0.0f, juce::jmin (bounds.getY(), zeroY - 1.0f),
+                                             ui::eq.withAlpha (0.03f * alpha), 0.0f, zeroY, false));
+    g.fillPath (fill);
+
+    // krivka se zari
+    g.setColour (ui::eq.withAlpha (0.10f * alpha));
+    g.strokePath (p, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (ui::eq.withAlpha (0.22f * alpha));
+    g.strokePath (p, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (ui::eq.withAlpha (alpha));
-    g.strokePath (p, juce::PathStrokeType (active ? 2.0f : 1.2f));
+    g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void EqView::drawDecayCurve (juce::Graphics& g, bool active)
 {
-    auto params = processor.currentParams();
-    const bool on = params.decayEqOn;
-    params.decayEqOn = true;   // ukaz krivku i vypnutou (ztlumene)
+    if (! active) return;
+    const auto params = processor.currentParams();
+    const bool on = params.decayEqOn || params.reverbType == dusi::ReverbType::prism;
     const float sr = (float) processor.getSampleRateForUi();
-    const float rt = juce::jlimit (0.2f, 20.0f, params.decaySec);
+    const float rt = rtBase();
     dusi::DecayEqDesign d;
-    d.compute (params, rt, sr);
+    d.compute (dusi::prismDecayParams (params), rt, sr);
 
-    juce::Path p;
+    // zaklad (DECAY)
+    {
+        juce::Path base;
+        base.startNewSubPath (graph.getX(), secToY (rt));
+        base.lineTo (graph.getRight(), secToY (rt));
+        const float dashes[] = { 4.0f, 4.0f };
+        juce::PathStrokeType (1.0f).createDashedStroke (base, base, dashes, 2);
+        g.setColour (ui::textDim.withAlpha (0.6f));
+        g.fillPath (base);
+    }
+
+    juce::Path p, real;
     bool started = false;
     for (float x = graph.getX(); x <= graph.getRight() + 1.0f; x += 3.0f)
     {
-        const float y = multToY (juce::jlimit (0.2f, 5.0f, d.multiplierAt (xToFreq (x), rt)));
-        if (! started) { p.startNewSubPath (x, y); started = true; } else p.lineTo (x, y);
+        const float f = xToFreq (x);
+        const float y = secToY (params.freeze ? kSecMax : rt * d.multiplierAt (f, rt));
+        const float yr = secToY (params.freeze ? kSecMax : effectiveRt (f, params, d, rt));
+        if (! started) { p.startNewSubPath (x, y); real.startNewSubPath (x, yr); started = true; }
+        else { p.lineTo (x, y); real.lineTo (x, yr); }
     }
-    const float alpha = (active ? 1.0f : 0.25f) * (on ? 1.0f : 0.4f);
-    if (active)
-    {
-        juce::Path fill (p);
-        fill.lineTo (graph.getRight(), dbToY (0));
-        fill.lineTo (graph.getX(), dbToY (0));
-        fill.closeSubPath();
-        g.setColour (ui::verb.withAlpha (0.12f * alpha));
-        g.fillPath (fill);
-    }
-    g.setColour (ui::verb.withAlpha (alpha));
-    const float dashes[] = { 6.0f, 4.0f };
-    if (active)
-        g.strokePath (p, juce::PathStrokeType (2.0f));
-    else
+
+    // plocha skutecneho dozvuku (vc. HIGH CUT)
+    juce::Path fill (real);
+    fill.lineTo (graph.getRight() + 1.0f, graph.getBottom());
+    fill.lineTo (graph.getX(), graph.getBottom());
+    fill.closeSubPath();
+    g.setGradientFill (juce::ColourGradient (ui::verb.withAlpha (on ? 0.22f : 0.12f), 0.0f, real.getBounds().getY(),
+                                             ui::verb.withAlpha (0.02f), 0.0f, graph.getBottom(), false));
+    g.fillPath (fill);
+    g.setColour (ui::verb.withAlpha (0.45f));
     {
         juce::Path dashed;
-        juce::PathStrokeType (1.2f).createDashedStroke (dashed, p, dashes, 2);
+        const float dashes[] = { 2.0f, 3.0f };
+        juce::PathStrokeType (1.2f).createDashedStroke (dashed, real, dashes, 2);
         g.fillPath (dashed);
     }
 
-    if (active)
-    {
-        g.setColour (ui::verb.withAlpha (0.8f));
-        g.setFont (ui::font (11.0f, 500));
-        g.drawText (ui::U ("délka dozvuku · základ ") + juce::String (rt, 2) + " s" + (on ? "" : ui::U ("  (vypnuto)")),
-                    graph.reduced (8.0f, 4.0f).removeFromTop (14.0f), juce::Justification::centredRight);
-    }
+    // krivka decay EQ se zari
+    const float alpha = on ? 1.0f : 0.5f;
+    g.setColour (ui::verb.withAlpha (0.12f * alpha));
+    g.strokePath (p, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (ui::verb.withAlpha (alpha));
+    g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // popis vpravo nahore
+    juce::String info = params.freeze ? ui::U ("FREEZE – nekonečný dozvuk")
+                                      : ui::U ("DECAY ") + juce::String (rt, 2) + " s";
+    if (params.reverbType == dusi::ReverbType::prism) info << ui::U ("  ·  PRISM: krátké basy, dlouhé výšky");
+    if (! params.decayEqOn) info << ui::U ("  ·  decay EQ vypnutý");
+    g.setColour (ui::verb);
+    g.setFont (ui::font (11.0f, 600));
+    g.drawText (info, graph.reduced (10.0f, 6.0f).removeFromTop (14.0f), juce::Justification::centredRight);
+    g.setColour (ui::textDim);
+    g.setFont (ui::font (10.0f, 500));
+    g.drawText (ui::U ("— nastavení   ┄ skutečně (s HIGH CUT)   ▒ spektrum dozvuku"),
+                graph.reduced (10.0f, 6.0f).withTrimmedTop (16.0f).removeFromTop (14.0f), juce::Justification::centredRight);
 }
 
 void EqView::drawNodes (juce::Graphics& g)
@@ -398,6 +522,14 @@ void EqView::drawNodes (juce::Graphics& g)
             g.setColour (col.withAlpha (0.6f));
             g.drawEllipse (juce::Rectangle<float> (28.0f, 28.0f).withCentre (pos), 1.0f);
         }
+        // svisla linka k ose (jako Pro-Q) u vybraneho bodu
+        if (i == selected)
+        {
+            g.setColour (col.withAlpha (0.25f));
+            g.drawVerticalLine ((int) pos.x, graph.getY(), graph.getBottom());
+        }
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillEllipse (juce::Rectangle<float> (r * 2.0f + 2.0f, r * 2.0f + 2.0f).withCentre (pos.translated (0.0f, 1.5f)));
         g.setColour (col);
         g.fillEllipse (juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (pos));
         g.setColour (i == selected ? ui::text : ui::inset);
@@ -407,15 +539,17 @@ void EqView::drawNodes (juce::Graphics& g)
         g.drawText (juce::String (i + 1), juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (pos), juce::Justification::centred);
     }
 
-    const int infoIndex = hover >= 0 ? hover : selected;
-    if (infoIndex >= 0 && nodeVisible (infoIndex))
+    if (selected >= 0 && nodeVisible (selected))
+        drawBandPanel (g);
+
+    if (hover >= 0 && hover != selected && nodeVisible (hover))
     {
-        const auto pos = nodePos (infoIndex);
-        const auto text = nodeText (infoIndex);
+        const auto pos = nodePos (hover);
+        const auto text = nodeText (hover);
         g.setFont (ui::font (11.0f, 500));
         const float w = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), text) + 16.0f;
-        auto box = juce::Rectangle<float> (w, 20.0f).withCentre ({ pos.x, pos.y - 22.0f });
-        if (box.getY() < graph.getY()) box.setY (pos.y + 14.0f);
+        auto box = juce::Rectangle<float> (w, 20.0f).withCentre ({ pos.x, pos.y - 24.0f });
+        if (box.getY() < graph.getY()) box.setY (pos.y + 16.0f);
         box = box.constrainedWithin (graph);
         g.setColour (ui::raised.withAlpha (0.95f));
         g.fillRoundedRectangle (box, 5.0f);
@@ -423,6 +557,72 @@ void EqView::drawNodes (juce::Graphics& g)
         g.drawRoundedRectangle (box.reduced (0.5f), 5.0f, 1.0f);
         g.setColour (ui::text);
         g.drawText (text, box, juce::Justification::centred);
+    }
+}
+
+// Panel vybraneho pasma dole uprostred grafu (jako ve FabFilteru): typ, frekvence, zisk / delka, Q
+void EqView::drawBandPanel (juce::Graphics& g)
+{
+    using namespace ui;
+    const int i = selected;
+    struct Cell { juce::String label, value; };
+    std::vector<Cell> cells;
+    juce::String title;
+    juce::Colour col;
+    if (mode == Mode::output)
+    {
+        const int t = (int) value (DusiVerbProcessor::eqId (i, "Type"));
+        col = kBandColours[i];
+        title = upper (DusiVerbProcessor::eqTypeNames()[t]);
+        cells.push_back ({ "FREKVENCE", hz (value (DusiVerbProcessor::eqId (i, "Freq"))) });
+        if (isGainType (i))
+        {
+            const float gdb = value (DusiVerbProcessor::eqId (i, "Gain"));
+            cells.push_back ({ "ZISK", (gdb >= 0 ? "+" : U ("−")) + juce::String (std::abs (gdb), 1) + " dB" });
+        }
+        if (t == (int) dusi::EqType::lowCut || t == (int) dusi::EqType::highCut)
+            cells.push_back ({ U ("STRMOST"), juce::String (12 << (int) value (DusiVerbProcessor::eqId (i, "Slope"))) + " dB/okt" });
+        else
+            cells.push_back ({ "Q", juce::String (value (DusiVerbProcessor::eqId (i, "Q")), 2) });
+    }
+    else
+    {
+        const char* names[] = { "BASY", "STŘEDY 1", "STŘEDY 2", "VÝŠKY" };
+        col = verb;
+        title = U (names[i]);
+        const float m = value (DusiVerbProcessor::dqId (i, "Mult")) * tiltOf (i);
+        cells.push_back ({ "FREKVENCE", hz (value (DusiVerbProcessor::dqId (i, "Freq"))) });
+        cells.push_back ({ "DOZVUK", juce::String (rtBase() * m, 2) + " s" });
+        cells.push_back ({ U ("NÁSOBEK"), U ("×") + juce::String (m, 2) });
+    }
+
+    const float cellW = 86.0f, titleW = 96.0f, h = 40.0f;
+    const float w = titleW + cellW * (float) cells.size() + 8.0f;
+    auto box = juce::Rectangle<float> (w, h).withCentre ({ graph.getCentreX(), graph.getBottom() - h * 0.5f - 8.0f });
+    // kdyz by panel prekryl vybrany bod, presun ho nahoru
+    if (box.expanded (14.0f).contains (nodePos (i))) box.setY (graph.getY() + 30.0f);
+    g.setColour (juce::Colour (0xf0101827));
+    g.fillRoundedRectangle (box, 7.0f);
+    g.setColour (col.withAlpha (0.55f));
+    g.drawRoundedRectangle (box.reduced (0.5f), 7.0f, 1.0f);
+
+    auto r = box.reduced (10.0f, 0.0f);
+    auto t = r.removeFromLeft (titleW - 10.0f);
+    g.setColour (col);
+    g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ t.getX() + 4.0f, t.getCentreY() }));
+    g.setFont (font (11.0f, 700, 0.06f));
+    g.drawText (juce::String (i + 1) + "  " + title, t.withTrimmedLeft (14.0f), juce::Justification::centredLeft, true);
+    for (auto& c : cells)
+    {
+        auto cr = r.removeFromLeft (cellW);
+        g.setColour (line);
+        g.drawVerticalLine ((int) cr.getX(), cr.getY() + 8.0f, cr.getBottom() - 8.0f);
+        g.setColour (textDim);
+        g.setFont (font (9.5f, 600, 0.06f));
+        g.drawText (c.label, cr.withTrimmedLeft (8.0f).withTrimmedBottom (h * 0.5f).withTrimmedTop (6.0f), juce::Justification::bottomLeft);
+        g.setColour (text);
+        g.setFont (font (12.0f, 600));
+        g.drawText (c.value, cr.withTrimmedLeft (8.0f).withTrimmedTop (h * 0.5f).withTrimmedBottom (4.0f), juce::Justification::topLeft);
     }
 }
 
@@ -472,7 +672,8 @@ void EqView::mouseDrag (const juce::MouseEvent& e)
     else
     {
         setValue (DusiVerbProcessor::dqId (selected, "Freq"), f);
-        setValue (DusiVerbProcessor::dqId (selected, "Mult"), juce::jlimit (0.25f, 4.0f, yToMult (e.position.y)));
+        setValue (DusiVerbProcessor::dqId (selected, "Mult"),
+                  juce::jlimit (0.25f, 4.0f, yToSec (e.position.y) / (rtBase() * tiltOf (selected))));
     }
     repaint();
 }
@@ -593,7 +794,8 @@ void EqView::timerCallback()
     if (eco)
     {
         if (analyzerOn) { analyzerOn = false; repaint(); }
-        processor.readAnalyzer (readBuf.data(), (int) readBuf.size());   // jen vyprazdnit frontu
+        processor.readAnalyzer (readBuf.data(), (int) readBuf.size(), false);   // jen vyprazdnit fronty
+        processor.readAnalyzer (readBuf.data(), (int) readBuf.size(), true);
         if (overlayKey() != paintedKey) repaint();
         return;
     }
@@ -601,7 +803,10 @@ void EqView::timerCallback()
 
     // nove vzorky z procesoru -> kruhova historie
     const int n = 1 << fftOrder;
-    const int got = processor.readAnalyzer (readBuf.data(), n);
+    // VYSTUP = spektrum vystupu, DOZVUK = spektrum samotneho dozvuku (druhou frontu jen vyprazdnit)
+    const bool tail = mode == Mode::decay;
+    processor.readAnalyzer (readBuf.data(), n, ! tail);
+    const int got = processor.readAnalyzer (readBuf.data(), n, tail);
     for (int i = 0; i < got; ++i)
     {
         history[(size_t) writePos] = readBuf[(size_t) i];

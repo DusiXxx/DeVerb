@@ -60,7 +60,7 @@ void SpaceView::endGestures()
 //------------------------------------------------------------------------------
 juce::Rectangle<float> SpaceView::contentArea() const
 {
-    return getLocalBounds().toFloat().withTrimmedTop (37.0f).withTrimmedBottom (16.0f).reduced (13.0f, 0.0f);
+    return getLocalBounds().toFloat();
 }
 
 SpaceView::Camera SpaceView::makeCamera() const
@@ -125,13 +125,7 @@ void SpaceView::paint (juce::Graphics& g)
 //------------------------------------------------------------------------------
 void SpaceView::paintStatic (juce::Graphics& g)
 {
-    g.fillAll (ui::background);   // neprusvitne pozadi (rohy panelu)
-    const auto bounds = getLocalBounds().toFloat();
-    ui::paintPanel (g, getLocalBounds(), "PROSTOR", kAccent, 36);
-    g.setColour (kTextDim);
-    g.setFont (ui::font (11.0f, 500));
-    g.drawText (U ("táhni zvuk · úchyty / kolečko = šířka · dvojklik = střed"),
-                bounds.withHeight (36.0f).reduced (12.0f, 0.0f), juce::Justification::centredRight);
+    g.fillAll (kPanel);   // panel s titulkem kresli MainPage, tady jen 3D okno
 
     const auto area = contentArea();
     juce::Graphics::ScopedSaveState save (g);

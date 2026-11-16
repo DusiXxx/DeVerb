@@ -7,7 +7,7 @@
 
 namespace dusi
 {
-enum class ReverbType { plate = 0, room, chamber, hall, spring };
+enum class ReverbType { plate = 0, room, chamber, hall, spring, prism };
 enum class EqType     { lowCut = 0, lowShelf, bell, highShelf, highCut, notch };
 enum class FilterType { lowPass = 0, bandPass, highPass };
 enum class LfoShape   { sine = 0, triangle, saw, square, random };
