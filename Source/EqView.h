@@ -66,6 +66,9 @@ private:
     void drawOutputCurve (juce::Graphics&, bool active);
     void drawDecayCurve (juce::Graphics&, bool active);
     void drawNodes (juce::Graphics&);
+    void drawNodeDots (juce::Graphics&);
+    juce::Path activeCurve;
+    juce::Colour activeCurveColour;
 
     DusiVerbProcessor& processor;
     Mode mode = Mode::output;

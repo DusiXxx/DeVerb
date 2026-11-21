@@ -410,6 +410,8 @@ void EffectsPage::select (dusi::Module m)
 
 void EffectsPage::timerCallback()
 {
+    const int hz = proc.eco.load() ? 4 : 10;
+    if (getTimerInterval() != 1000 / hz) startTimerHz (hz);
     if (! isShowing()) return;
     panels[(size_t) current]->refresh();
     static_cast<ModulePanel*> (dynamics.get())->refresh();

@@ -67,9 +67,11 @@ public:
     {
         window = (float) std::max (1024, (int) (0.045 * sampleRate));   // ~45 ms okno
         line.prepare ((int) window * 2 + 8);
+        win.setFreq (1.0f, window);   // 1 perioda na okno
         phase = 0.0f;
+        win.reset();
     }
-    void reset() { line.clear(); phase = 0.0f; }
+    void reset() { line.clear(); phase = 0.0f; win.reset(); }
 
     float process (float x)
     {
@@ -79,12 +81,16 @@ public:
         if (phase >= window) phase -= window;
         const float p2 = phase + 0.5f * window >= window ? phase - 0.5f * window : phase + 0.5f * window;
         const float d1 = window - phase + 2.0f, d2 = window - p2 + 2.0f;
-        const float w1 = std::sin (kPi * phase / window), w2 = std::sin (kPi * p2 / window);
-        return line.read (d1) * w1 * w1 + line.read (d2) * w2 * w2;
+        // okna sin^2 a cos^2 (hlavy posunute o pul okna) -> staci jeden kosinus (rotaci, bez sin())
+        if (phase < 1.0f) win.reset();   // nove okno: presne od nuly
+        else win.next();
+        const float w1sq = 0.5f - 0.5f * win.c;   // sin^2 (pi * phase / window)
+        return line.read (d1) * w1sq + line.read (d2) * (1.0f - w1sq);
     }
 
 private:
     DelayLine line;
+    Phasor win;
     float window = 2048.0f, phase = 0.0f;
 };
 

@@ -127,7 +127,7 @@ float EqView::rtBase() const
 
 float EqView::tiltOf (int band) const
 {
-    static const float tilt[dusi::kNumDecayBands] = { 0.5f, 0.85f, 1.15f, 1.45f };
+    static const float tilt[dusi::kNumDecayBands] = { 0.5f, 1.0f, 1.0f, 1.7f };
     return (int) value ("reverbType") == (int) dusi::ReverbType::prism ? tilt[juce::jlimit (0, dusi::kNumDecayBands - 1, band)] : 1.0f;
 }
 
@@ -241,17 +241,14 @@ std::vector<float> EqView::overlayKey() const
 
 void EqView::paint (juce::Graphics& g)
 {
+    // Vse staticke (mrizka, krivky, body) je v JEDNOM obrazku, ktery se prekresli jen pri zmene nastaveni.
+    // Kazdy snimek = 1 kopie obrazku + analyzator + znovu jen tenka hlavni krivka a body navrch.
     const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
-    auto makeImage = [this, scale] (juce::Image::PixelFormat fmt)
+    const auto key = overlayKey();
+    if (bgCache.isNull() || key != overlayCacheKey || ! juce::approximatelyEqual (scale, cacheScale))
     {
-        return juce::Image (fmt, juce::jmax (1, juce::roundToInt ((float) getWidth() * scale)),
-                            juce::jmax (1, juce::roundToInt ((float) getHeight() * scale)), true);
-    };
-
-    const int bgKey = getWidth() * 7919 + getHeight() * 31 + (int) mode;
-    if (bgCache.isNull() || bgKey != bgCacheKey || ! juce::approximatelyEqual (scale, cacheScale))
-    {
-        bgCache = makeImage (juce::Image::RGB);
+        bgCache = juce::Image (juce::Image::RGB, juce::jmax (1, juce::roundToInt ((float) getWidth() * scale)),
+                               juce::jmax (1, juce::roundToInt ((float) getHeight() * scale)), true);
         juce::Graphics ig (bgCache);
         ig.addTransform (juce::AffineTransform::scale (scale));
         ig.fillAll (ui::panel);
@@ -260,24 +257,6 @@ void EqView::paint (juce::Graphics& g)
         ig.setColour (ui::line);
         ig.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 6.0f, 1.0f);
         drawGrid (ig);
-        bgCacheKey = bgKey;
-        overlayCache = {};
-    }
-    g.drawImage (bgCache, getLocalBounds().toFloat());
-
-    if (analyzerOn)
-    {
-        juce::Graphics::ScopedSaveState s (g);
-        g.reduceClipRegion (graph.toNearestInt());
-        drawAnalyzer (g);
-    }
-
-    const auto key = overlayKey();
-    if (overlayCache.isNull() || key != overlayCacheKey || ! juce::approximatelyEqual (scale, cacheScale))
-    {
-        overlayCache = makeImage (juce::Image::ARGB);
-        juce::Graphics ig (overlayCache);
-        ig.addTransform (juce::AffineTransform::scale (scale));
         {
             juce::Graphics::ScopedSaveState s (ig);
             ig.reduceClipRegion (graph.toNearestInt());
@@ -286,9 +265,18 @@ void EqView::paint (juce::Graphics& g)
         }
         drawNodes (ig);
         overlayCacheKey = key;
+        cacheScale = scale;
     }
-    g.drawImage (overlayCache, getLocalBounds().toFloat());
-    cacheScale = scale;
+    g.drawImage (bgCache, getLocalBounds().toFloat());
+
+    if (analyzerOn)
+    {
+        {
+            juce::Graphics::ScopedSaveState s (g);
+            g.reduceClipRegion (graph.toNearestInt());
+            drawAnalyzer (g);   // jen pruhledna plocha - krivka a body pod ni zustanou videt
+        }
+    }
     paintedKey = key;
 }
 
@@ -343,10 +331,10 @@ void EqView::drawAnalyzer (juce::Graphics& g)
     const float binHz = sr / (float) n;
     const bool tail = mode == Mode::decay;
 
-    juce::Path line, fill;
+    juce::Path fill;
     bool started = false;
     float prev = graph.getBottom();
-    for (float x = graph.getX(); x <= graph.getRight() + 2.0f; x += 2.0f)
+    for (float x = graph.getX(); x <= graph.getRight() + 3.0f; x += 3.0f)   // 3 px krok staci (mene bodu = mene prace)
     {
         const float f = xToFreq (x);
         const float bin = f / binHz;
@@ -357,19 +345,16 @@ void EqView::drawAnalyzer (juce::Graphics& g)
         float y = juce::jmap (juce::jlimit (-90.0f, 6.0f, db), -90.0f, 6.0f, graph.getBottom(), graph.getY() + graph.getHeight() * 0.08f);
         y = started ? prev + 0.55f * (y - prev) : y;              // vyhlazeni mezi sousedy
         prev = y;
-        if (! started) { line.startNewSubPath (x, y); fill.startNewSubPath (x, graph.getBottom()); started = true; }
-        else line.lineTo (x, y);
+        if (! started) { fill.startNewSubPath (x, graph.getBottom()); started = true; }
         fill.lineTo (x, y);
     }
-    fill.lineTo (graph.getRight() + 2.0f, graph.getBottom());
+    fill.lineTo (graph.getRight() + 3.0f, graph.getBottom());
     fill.closeSubPath();
 
     const auto col = tail ? ui::verb : juce::Colour (0xff8fb4e8);
-    g.setGradientFill (juce::ColourGradient (col.withAlpha (tail ? 0.26f : 0.20f), 0.0f, graph.getY() + graph.getHeight() * 0.3f,
-                                             col.withAlpha (0.02f), 0.0f, graph.getBottom(), false));
+    // jen plna pruhledna plocha (obrys cary a prechod stoji nekolikrat vic vykonu)
+    g.setColour (col.withAlpha (tail ? 0.18f : 0.13f));
     g.fillPath (fill);
-    g.setColour (col.withAlpha (tail ? 0.45f : 0.35f));
-    g.strokePath (line, juce::PathStrokeType (1.0f));
 }
 
 void EqView::drawOutputCurve (juce::Graphics& g, bool active)
@@ -435,6 +420,8 @@ void EqView::drawOutputCurve (juce::Graphics& g, bool active)
     g.strokePath (p, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (ui::eq.withAlpha (alpha));
     g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    activeCurve = p;
+    activeCurveColour = ui::eq.withAlpha (alpha);
 }
 
 void EqView::drawDecayCurve (juce::Graphics& g, bool active)
@@ -491,6 +478,8 @@ void EqView::drawDecayCurve (juce::Graphics& g, bool active)
     g.strokePath (p, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (ui::verb.withAlpha (alpha));
     g.strokePath (p, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    activeCurve = p;
+    activeCurveColour = ui::verb.withAlpha (alpha);
 
     // popis vpravo nahore
     juce::String info = params.freeze ? ui::U ("FREEZE – nekonečný dozvuk")
@@ -506,7 +495,7 @@ void EqView::drawDecayCurve (juce::Graphics& g, bool active)
                 graph.reduced (10.0f, 6.0f).withTrimmedTop (16.0f).removeFromTop (14.0f), juce::Justification::centredRight);
 }
 
-void EqView::drawNodes (juce::Graphics& g)
+void EqView::drawNodeDots (juce::Graphics& g)
 {
     for (int i = 0; i < numNodes(); ++i)
     {
@@ -538,6 +527,12 @@ void EqView::drawNodes (juce::Graphics& g)
         g.setFont (ui::font (10.0f, 700));
         g.drawText (juce::String (i + 1), juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (pos), juce::Justification::centred);
     }
+
+}
+
+void EqView::drawNodes (juce::Graphics& g)
+{
+    drawNodeDots (g);
 
     if (selected >= 0 && nodeVisible (selected))
         drawBandPanel (g);

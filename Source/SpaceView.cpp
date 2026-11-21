@@ -354,7 +354,7 @@ void SpaceView::paintDynamic (juce::Graphics& g)
         for (int k = 0; k < 2; ++k)
         {
             const float frac = std::fmod (ringPhase + (float) k / 2.0f, 1.0f);
-            const float r = 0.05f + frac * R * 1.1f;
+            const float r = 0.05f + frac * R * kRingReach;
             g.setColour (kVerb.withAlpha ((1.0f - frac) * 0.35f * ringEnergy));
             g.strokePath (floorEllipse (xs, zs, r, r * 0.7f), juce::PathStrokeType (1.2f));
         }
@@ -499,8 +499,33 @@ void SpaceView::timerCallback()
     const float period = juce::jlimit (0.6f, 3.0f, processor.uiDecaySec.load() * 0.5f);
     ringPhase = std::fmod (ringPhase + (1.0f / (float) hz) / period, 1.0f);
 
-    // prekreslit jen kdyz se neco zmenilo nebo bezi animace
+    // prekreslit jen kdyz se neco zmenilo nebo bezi animace; animace = jen oblast kolem zvuku
     const bool rings = ringEnergy > 0.0f && value ("reverbOn") > 0.5f;
-    if (rings || sceneKey() != paintedKey || std::abs (level - paintedLevel) > 0.03f)
+    if (sceneKey() != paintedKey)
         repaint();
+    else if (rings || std::abs (level - paintedLevel) > 0.03f || ringsShown)
+        repaint (dynamicBounds());
+    ringsShown = rings;
+}
+
+// Kam az muze zasahnout ziva vrstva (vlny, zare, uchyty) - mimo ni se nic neprekresluje
+juce::Rectangle<int> SpaceView::dynamicBounds() const
+{
+    const auto c = makeCamera();
+    const float xs = sourceX (c), zs = sourceZ (c);
+    const float hw = value ("width") * 0.01f * dusi::space::kWidthReach * c.R;
+    const float r = 0.05f + c.R * kRingReach;
+    juce::Rectangle<float> b;
+    bool first = true;
+    for (int i = 0; i < 16; ++i)
+    {
+        const float t = juce::MathConstants<float>::twoPi * (float) i / 16.0f;
+        const auto pt = c.project (xs + juce::jmax (r, hw) * std::cos (t), juce::jmax (0.2f, zs + r * 0.7f * std::sin (t)));
+        b = first ? juce::Rectangle<float> (pt, pt) : b.getUnion (juce::Rectangle<float> (pt, pt));
+        first = false;
+    }
+    const auto src = c.project (xs, zs, kDotHeight);
+    const float rad = 10.0f * c.zNear / zs + 4.0f;
+    b = b.getUnion (juce::Rectangle<float> (rad * 12.0f, rad * 12.0f).withCentre (src));
+    return b.expanded (8.0f).getSmallestIntegerContainer().getIntersection (getLocalBounds());
 }

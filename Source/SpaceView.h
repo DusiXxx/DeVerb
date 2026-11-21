@@ -36,6 +36,9 @@ private:
     };
 
     static constexpr float kDotHeight = 0.35f;   // zvuk se vznasi nad podlahou
+    static constexpr float kRingReach = 0.6f;    // jak daleko dojdou vlny (mensi = mene prekreslovani)
+    juce::Rectangle<int> dynamicBounds() const;
+    bool ringsShown = false;
 
     Camera makeCamera() const;
     juce::Rectangle<float> contentArea() const;

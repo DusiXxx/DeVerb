@@ -176,6 +176,7 @@ public:
         d2[0].prepare ((int) (3720 * m));
         d2[1].prepare ((int) (3163 * m));
         size.prepare (sampleRate, 250.0f);
+        intK = -1.0f;
         bwCoef = std::exp (-2.0f * kPi * 0.45f * 0.9f);
         first = true;
         reset();
@@ -191,7 +192,7 @@ public:
             eq[i].reset();
         }
         bw = 0.0f;
-        lfoPhase = 0.0f;
+        lfo.reset();
     }
 
     void configure (const LateConfig& c)
@@ -203,6 +204,8 @@ public:
         decay = c.freeze ? 0.99999f : std::min (0.9995f, std::pow (10.0f, -3.0f * loopSec / (4.0f * std::clamp (c.rt, 0.2f, 20.0f))));
         dampCoef = c.freeze ? 0.0f : c.dampCoef;
         modDepth = std::clamp (c.mod, 0.0f, 1.0f) * 16.0f * srScale;
+        lfo.setFreq (0.8f, sr);
+        for (int i = 0; i < 4; ++i) inLen[i].set (kInLen[i] * srScale);
         eqOn = c.eq != nullptr && c.eq->isOn();
         if (eqOn && (c.eq->getVersion() != eqVersion || ! size.settled() || std::fabs (s - eqSize) > 1.0e-6f))
         {
@@ -218,35 +221,73 @@ public:
     {
         const float k = srScale * size.next();
         const bool exact = size.settled();
-        auto L = [exact] (float len) { return exact ? std::round (len) : len; };   // cele vzorky = bez ztraty vysek
         bw = x + bwCoef * (bw - x);
         x = bw;
-        x = inAp[0].process (x, 142 * srScale, 0.75f);
-        x = inAp[1].process (x, 107 * srScale, 0.75f);
-        x = inAp[2].process (x, 379 * srScale, 0.625f);
-        x = inAp[3].process (x, 277 * srScale, 0.625f);
+        x = inAp[0].processFrac (x, inLen[0].i, inLen[0].f, 0.75f);
+        x = inAp[1].processFrac (x, inLen[1].i, inLen[1].f, 0.75f);
+        x = inAp[2].processFrac (x, inLen[2].i, inLen[2].f, 0.625f);
+        x = inAp[3].processFrac (x, inLen[3].i, inLen[3].f, 0.625f);
 
-        lfoPhase += 2.0f * kPi * 0.8f / sr;
-        if (lfoPhase > 2.0f * kPi) lfoPhase -= 2.0f * kPi;
-        const float lfoA = modDepth * std::sin (lfoPhase);
-        const float lfoB = modDepth * std::cos (lfoPhase);
+        lfo.next();   // sin/cos rotaci (bez volani sin/cos)
+        const float lfoA = modDepth * lfo.s;
+        const float lfoB = modDepth * lfo.c;
 
-        const float fbL = decay * d2[0].read (L (3720 * k));
-        const float fbR = decay * d2[1].read (L (3163 * k));
-        tankHalf (0, x + fbR, 672 * k + lfoA + modDepth + 2.0f, L (4453 * k), L (1800 * k));
-        tankHalf (1, x + fbL, 908 * k + lfoB + modDepth + 2.0f, L (4217 * k), L (2656 * k));
-
-        yl = d1[1].read (266 * k) + d1[1].read (2974 * k) - ap2[1].line.read (1913 * k)
-           + d2[1].read (1996 * k) - d1[0].read (1990 * k) - ap2[0].line.read (187 * k)
-           - d2[0].read (1066 * k);
-        yr = d1[0].read (353 * k) + d1[0].read (3627 * k) - ap2[0].line.read (1228 * k)
-           + d2[0].read (2673 * k) - d1[1].read (2111 * k) - ap2[1].line.read (335 * k)
-           - d2[1].read (121 * k);
+        if (exact)   // ustalena velikost: vsechny delky v celych vzorcich (spocitane jednou)
+        {
+            if (k != intK) updateIntLengths (k);
+            const float fbL = decay * d2[0].readInt (iL[0]);
+            const float fbR = decay * d2[1].readInt (iL[1]);
+            tankHalfInt (0, x + fbR, 672 * k + lfoA + modDepth + 2.0f, iL[2], iL[3]);
+            tankHalfInt (1, x + fbL, 908 * k + lfoB + modDepth + 2.0f, iL[4], iL[5]);
+            const FracLen* t = tap;
+            yl = d1[1].readFrac (t[0].i, t[0].f) + d1[1].readFrac (t[1].i, t[1].f) - ap2[1].line.readFrac (t[2].i, t[2].f)
+               + d2[1].readFrac (t[3].i, t[3].f) - d1[0].readFrac (t[4].i, t[4].f) - ap2[0].line.readFrac (t[5].i, t[5].f)
+               - d2[0].readFrac (t[6].i, t[6].f);
+            yr = d1[0].readFrac (t[7].i, t[7].f) + d1[0].readFrac (t[8].i, t[8].f) - ap2[0].line.readFrac (t[9].i, t[9].f)
+               + d2[0].readFrac (t[10].i, t[10].f) - d1[1].readFrac (t[11].i, t[11].f) - ap2[1].line.readFrac (t[12].i, t[12].f)
+               - d2[1].readFrac (t[13].i, t[13].f);
+        }
+        else         // behem zmeny velikosti plynule (interpolace)
+        {
+            const float fbL = decay * d2[0].read (3720 * k);
+            const float fbR = decay * d2[1].read (3163 * k);
+            tankHalf (0, x + fbR, 672 * k + lfoA + modDepth + 2.0f, 4453 * k, 1800 * k);
+            tankHalf (1, x + fbL, 908 * k + lfoB + modDepth + 2.0f, 4217 * k, 2656 * k);
+            yl = d1[1].read (266 * k) + d1[1].read (2974 * k) - ap2[1].line.read (1913 * k)
+               + d2[1].read (1996 * k) - d1[0].read (1990 * k) - ap2[0].line.read (187 * k)
+               - d2[0].read (1066 * k);
+            yr = d1[0].read (353 * k) + d1[0].read (3627 * k) - ap2[0].line.read (1228 * k)
+               + d2[0].read (2673 * k) - d1[1].read (2111 * k) - ap2[1].line.read (335 * k)
+               - d2[1].read (121 * k);
+        }
         yl *= 0.6f;
         yr *= 0.6f;
     }
 
 private:
+    static constexpr float kInLen[4] = { 142, 107, 379, 277 };
+
+    void updateIntLengths (float k)
+    {
+        static const float len[6] = { 3720, 3163, 4453, 1800, 4217, 2656 };
+        static const float out[14] = { 266, 2974, 1913, 1996, 1990, 187, 1066, 353, 3627, 1228, 2673, 2111, 335, 121 };
+        for (int i = 0; i < 6; ++i) iL[i] = std::max (1, (int) std::lround (len[i] * k));   // smycka: cele vzorky (jako driv)
+        for (int i = 0; i < 14; ++i) tap[i].set (out[i] * k);                               // vystupy: interpolace (jako driv)
+        intK = k;
+    }
+
+    void tankHalfInt (int i, float x, float ap1Len, int d1Len, int ap2Len)
+    {
+        x = ap1[i].processCubic (x, ap1Len, -0.7f);
+        const float t = d1[i].readInt (d1Len);
+        d1[i].write (x);
+        damp[i] = t + dampCoef * (damp[i] - t);
+        float v = damp[i];
+        if (eqOn) v = eq[i].process (v);
+        x = ap2[i].processInt (decay * v, ap2Len, 0.5f);
+        d2[i].write (x);
+    }
+
     void tankHalf (int i, float x, float ap1Len, float d1Len, float ap2Len)
     {
         x = ap1[i].processCubic (x, ap1Len, -0.7f);
@@ -264,8 +305,10 @@ private:
     DecayEqPath eq[2];
     Smooth size;
     float sr = 48000.0f, srScale = 1.0f, decay = 0.5f, dampCoef = 0.0f, bwCoef = 0.0f, modDepth = 0.0f;
-    float damp[2] {}, bw = 0.0f, lfoPhase = 0.0f, eqSize = 0.0f;
-    int eqVersion = -1;
+    float damp[2] {}, bw = 0.0f, eqSize = 0.0f, intK = -1.0f;
+    int eqVersion = -1, iL[6] {};
+    FracLen inLen[4], tap[14];
+    Phasor lfo;
     bool eqOn = false, first = true;
 };
 
@@ -306,7 +349,8 @@ public:
             default: break;
         }
         for (int i = 0; i < N; ++i) baseLen[i] = base[i] * 0.001f * sr;
-        for (int i = 0; i < 4; ++i) diffLen[i] = dif[i] * 0.001f * sr;
+        for (int i = 0; i < 4; ++i) diffLen[i].set (dif[i] * 0.001f * sr);
+        intSf = -1.0f;
         eqVersion = -1;
         reset();
     }
@@ -318,11 +362,12 @@ public:
         for (auto& a : diff) a.line.clear();
         for (auto& e : eq) e.reset();
         for (auto& d : damp) d = 0.0f;
-        lfoPhase = 0.0f;
+        lfo.reset();
     }
 
     void configure (const LateConfig& c)
     {
+        lfo.setFreq (0.7f, sr);
         size.set (0.45f + 0.55f * std::clamp (c.size, 0.3f, 1.5f));
         if (first) { size.snap (size.target); first = false; }
         const float sf = size.z;
@@ -344,25 +389,27 @@ public:
     void process (float x, float& yl, float& yr)
     {
         const float sf = size.next();
-        for (int i = 0; i < 4; ++i) x = diff[i].process (x, diffLen[i], diffG);
+        for (int i = 0; i < 4; ++i) x = diff[i].processFrac (x, diffLen[i].i, diffLen[i].f, diffG);
 
-        lfoPhase += 2.0f * kPi * 0.7f / sr;
-        if (lfoPhase > 2.0f * kPi) lfoPhase -= 2.0f * kPi;
-
+        lfo.next();   // sin/cos rotaci, ne volanim sin() pro kazdou linku
         const bool exact = size.settled();
+        if (exact && sf != intSf)   // ustalena velikost: delky v celych vzorcich spocitat jednou
+        {
+            for (int i = 0; i < N; ++i) intLen[i] = std::clamp ((int) std::lround (baseLen[i] * sf), 1, lines[i].capacity());
+            intSf = sf;
+        }
         float v[N], sum = 0.0f;
         for (int i = 0; i < N; ++i)
         {
-            float d = baseLen[i] * sf;
             float o;
             if ((i & 1) == 0 && modDepth > 0.0f)
-                o = lines[i].readCubic (d + modDepth * (1.0f + std::sin (lfoPhase + 1.3f * (float) i)));
+                o = lines[i].readCubic (baseLen[i] * sf + modDepth * (1.0f + lfo.s * modCos[i] + lfo.c * modSin[i]));
             else
-                o = lines[i].read (exact ? std::round (d) : d);
+                o = exact ? lines[i].readIntUnchecked (intLen[i]) : lines[i].read (baseLen[i] * sf);
             damp[i] = o + dampCoef[i] * (damp[i] - o);
-            float s = damp[i];
-            if (eqOn) s = eq[i].process (s);
-            v[i] = s * gain[i];
+            float sv = damp[i];
+            if (eqOn) sv = eq[i].process (sv);
+            v[i] = sv * gain[i];
             sum += v[i];
         }
         const float h = sum * (2.0f / N);
@@ -385,8 +432,14 @@ private:
     Allpass diff[4];
     DecayEqPath eq[N];
     Smooth size;
-    float baseLen[N] {}, gain[N] {}, damp[N] {}, dampCoef[N] {}, diffLen[4] {};
-    float sr = 48000.0f, modDepth = 0.0f, diffG = 0.65f, outScale = 0.6f, lfoPhase = 0.0f, eqSize = 0.0f;
+    float baseLen[N] {}, gain[N] {}, damp[N] {}, dampCoef[N] {};
+    FracLen diffLen[4];
+    int intLen[N] {};
+    float sr = 48000.0f, modDepth = 0.0f, diffG = 0.65f, outScale = 0.6f, eqSize = 0.0f, intSf = -1.0f;
+    Phasor lfo;
+    // faze modulace linek: sin (x + 1.3 i) = sin x * cos 1.3i + cos x * sin 1.3i
+    static constexpr float modCos[N] = { 1.0f, 0.0f, -0.856889f, 0.0f, 0.468517f, 0.0f, 0.053955f, 0.0f };
+    static constexpr float modSin[N] = { 0.0f, 0.0f, 0.515501f, 0.0f, -0.883455f, 0.0f, 0.998543f, 0.0f };
     int eqVersion = -1;
     bool eqOn = false, first = true;
 };
@@ -566,7 +619,7 @@ public:
             tp.tDelay = c.del;
             tp.tGl = c.g * norm * std::sqrt (0.5f * (1.0f - p));
             tp.tGr = c.g * norm * std::sqrt (0.5f * (1.0f + p));
-            if (first) { tp.delay = tp.tDelay; tp.gl = tp.tGl; tp.gr = tp.tGr; tp.intDelay = (int) std::lround (tp.tDelay); }
+            if (first) { tp.delay = tp.tDelay; tp.gl = tp.tGl; tp.gr = tp.tGr; tp.intDelay = std::clamp ((int) std::lround (tp.tDelay), 1, line.capacity()); }
             const float inv = 1.0f / (float) kRamp;
             tp.dDelay = (tp.tDelay - tp.delay) * inv;
             tp.dGl = (tp.tGl - tp.gl) * inv;
@@ -594,14 +647,14 @@ public:
                 if (tp.order2) { l2 += s * tp.gl; r2 += s * tp.gr; } else { l1 += s * tp.gl; r1 += s * tp.gr; }
             }
             if (rampLeft == 0)
-                for (auto& tp : taps) tp.intDelay = (int) std::lround (tp.delay);
+                for (auto& tp : taps) tp.intDelay = std::clamp ((int) std::lround (tp.delay), 1, line.capacity());
         }
         else   // ustaleno: cele vzorky, zadna interpolace
         {
             for (int i = 0; i < numTaps; ++i)
             {
                 const auto& tp = taps[(size_t) i];
-                const float s = line.readInt (tp.intDelay);
+                const float s = line.readIntUnchecked (tp.intDelay);
                 if (tp.order2) { l2 += s * tp.gl; r2 += s * tp.gr; } else { l1 += s * tp.gl; r1 += s * tp.gr; }
             }
         }
@@ -640,7 +693,8 @@ inline Params prismDecayParams (const Params& p)
 {
     if (p.reverbType != ReverbType::prism) return p;
     Params q = p;
-    static const float tilt[kNumDecayBands] = { 0.5f, 0.85f, 1.15f, 1.45f };
+    // jen basy a vysky (stredy x1 se v kazde lince preskakuji = polovina vypoctu decay EQ)
+    static const float tilt[kNumDecayBands] = { 0.5f, 1.0f, 1.0f, 1.7f };
     for (int i = 0; i < kNumDecayBands; ++i)
         q.decayEq[(size_t) i].mult = (p.decayEqOn ? p.decayEq[(size_t) i].mult : 1.0f) * tilt[i];
     q.decayEqOn = true;
@@ -657,6 +711,8 @@ public:
         highC = BiquadCoefs::highPass (2600.0f, 0.7071f, sr);
         for (auto& d : drift) d.prepare ((int) (0.03f * sr) + 8);
         depth.prepare (sampleRate, 100.0f);
+        driftLfo.setFreq (0.13f, sr);
+        panLfo.setFreq (0.055f, sr);
         reset();
     }
     void reset()
@@ -664,7 +720,7 @@ public:
         for (auto& b : sideS) b.reset();
         for (auto& b : highS) b.reset();
         for (auto& d : drift) d.clear();
-        phDrift = 0.0f; phPan = 0.0f;
+        driftLfo.reset(); panLfo.reset();
     }
     void setMod (float mod) { depth.set ((0.4f + 1.6f * std::clamp (mod, 0.0f, 1.0f)) * 0.001f * sr); }
 
@@ -681,16 +737,16 @@ public:
         const float restL = l - hiL, restR = r - hiR;
 
         // vysky: pomaly drift (L a P v protifazi) -> plovouci jas
-        phDrift += 2.0f * kPi * 0.13f / sr;  if (phDrift > 2.0f * kPi) phDrift -= 2.0f * kPi;
-        phPan   += 2.0f * kPi * 0.055f / sr; if (phPan > 2.0f * kPi) phPan -= 2.0f * kPi;
+        driftLfo.next();
+        panLfo.next();
         const float dep = depth.next(), base = 0.009f * sr;
         drift[0].write (hiL);
         drift[1].write (hiR);
-        float hl = drift[0].readCubic (base + dep * (1.0f + std::sin (phDrift)));
-        float hr = drift[1].readCubic (base + dep * (1.0f + std::cos (phDrift)));
+        float hl = drift[0].readCubic (base + dep * (1.0f + driftLfo.s));
+        float hr = drift[1].readCubic (base + dep * (1.0f + driftLfo.c));
         // sirka vysek + pomale prelevani mezi L a P
         const float hm = 0.5f * (hl + hr), hs = 0.5f * (hl - hr) * 1.2f;
-        const float pan = 0.28f * std::sin (phPan);
+        const float pan = 0.28f * panLfo.s;
         hl = (hm + hs) * (1.0f - pan);
         hr = (hm - hs) * (1.0f + pan);
 
@@ -703,7 +759,8 @@ private:
     BiquadState sideS[2], highS[2];
     DelayLine drift[2];
     Smooth depth;
-    float sr = 48000.0f, phDrift = 0.0f, phPan = 0.0f;
+    Phasor driftLfo, panLfo;
+    float sr = 48000.0f;
 };
 
 class ReverbUnit

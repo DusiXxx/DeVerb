@@ -67,6 +67,42 @@ struct Smooth
     float z = 0.0f, target = 0.0f, coef = 0.0f;
 };
 
+// Delka zpozdeni rozlozena predem (cela cast + zlomek), pro readFrac / processFrac
+struct FracLen
+{
+    int i = 1;
+    float f = 0.0f;
+    void set (float d, int maxLen = 1 << 24)
+    {
+        d = std::clamp (d, 1.0f, (float) maxLen);
+        i = (int) d;
+        f = d - (float) i;
+    }
+};
+
+//------------------------------------------------------------------------------
+// Sinusovy oscilator rotaci (sin + cos bez volani sin/cos kazdy vzorek)
+struct Phasor
+{
+    void setFreq (float hz, float sampleRate)
+    {
+        const double w = 2.0 * 3.14159265358979 * hz / sampleRate;
+        dc = (float) std::cos (w);
+        ds = (float) std::sin (w);
+    }
+    void reset (float phaseRad = 0.0f) { c = std::cos (phaseRad); s = std::sin (phaseRad); }
+    void next()
+    {
+        const float nc = c * dc - s * ds;
+        s = s * dc + c * ds;
+        c = nc;
+        const float g = 1.5f - 0.5f * (c * c + s * s);   // udrzet amplitudu 1 (zadne ujizdeni)
+        c *= g;
+        s *= g;
+    }
+    float c = 1.0f, s = 0.0f, dc = 1.0f, ds = 0.0f;
+};
+
 //------------------------------------------------------------------------------
 // Kruhovy buffer s linearni interpolaci. d = 1 vraci naposledy zapsany vzorek.
 class DelayLine
@@ -95,8 +131,18 @@ public:
         return a + frac * (b - a);
     }
 
+    // Linearni interpolace s predem rozlozenou delkou (cela cast + zlomek): stejny zvuk jako read(), mene vypoctu
+    float readFrac (int di, float frac) const
+    {
+        const float a = buf[(size_t) ((w - di) & mask)];
+        const float b = buf[(size_t) ((w - di - 1) & mask)];
+        return a + frac * (b - a);
+    }
+
     // Cteni o cely pocet vzorku (nejrychlejsi)
     float readInt (int d) const { return buf[(size_t) ((w - std::clamp (d, 1, mask - 2)) & mask)]; }
+    // Bez kontroly rozsahu - jen pro delky overene predem (nejrychlejsi)
+    float readIntUnchecked (int d) const { return buf[(size_t) ((w - d) & mask)]; }
 
     // Kubicka (Hermite) interpolace - pro modulovane linky ve smycce, mene tlumi vysky
     float readCubic (float d) const
@@ -124,6 +170,22 @@ struct Allpass
     float process (float x, float delay, float g)
     {
         const float d = line.read (delay);
+        const float v = x - g * d;
+        line.write (v);
+        return d + g * v;
+    }
+    // pevna delka rozlozena na celou cast + zlomek (zvuk stejny jako process())
+    float processFrac (float x, int di, float frac, float g)
+    {
+        const float d = line.readFrac (di, frac);
+        const float v = x - g * d;
+        line.write (v);
+        return d + g * v;
+    }
+    // pevna delka v celych vzorcich
+    float processInt (float x, int delay, float g)
+    {
+        const float d = line.readInt (delay);
         const float v = x - g * d;
         line.write (v);
         return d + g * v;

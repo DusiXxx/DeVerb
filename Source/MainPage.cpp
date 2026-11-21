@@ -162,10 +162,12 @@ int MainPage::tempoHighlightKey() const
 
 void MainPage::timerCallback()
 {
+    const int hz = proc.eco.load() ? 4 : 15;   // ECO: meric korelace a tempo jen 4x za sekundu
+    if (getTimerInterval() != 1000 / hz) startTimerHz (hz);
     if (! isShowing()) return;
     spaceMacro.refresh();
     const float corr = proc.uiCorrelation.load(), ag = proc.uiAutoGain.load();
-    if (std::abs (corr - shownCorrelation) > 0.005f || std::abs (ag - shownAutoGain) > 0.005f)
+    if (std::abs (corr - shownCorrelation) > 0.01f || std::abs (ag - shownAutoGain) > 0.01f)
     {
         shownCorrelation = corr;
         shownAutoGain = ag;

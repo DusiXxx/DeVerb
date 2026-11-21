@@ -6,7 +6,7 @@
 #include <mutex>
 
 #ifndef JucePlugin_VersionString
- #define JucePlugin_VersionString "0.6.0"
+ #define JucePlugin_VersionString "0.6.1"
 #endif
 
 // Aktualizace z GitHubu (vydani obsahuje latest.json + zip s pluginem).
